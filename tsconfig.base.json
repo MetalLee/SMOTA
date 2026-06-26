@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["dom", "dom.iterable", "es2022"],
+    "allowJs": false,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "preserve",
+    "incremental": true,
+    "baseUrl": ".",
+    "paths": {
+      "@smota/shared": ["packages/shared/src/index.ts"],
+      "@smota/agent-core": ["packages/agent-core/src/index.ts"],
+      "@smota/db": ["packages/db/src/index.ts"],
+      "@smota/sandbox-runner": ["packages/sandbox-runner/src/index.ts"]
+    }
+  }
+}
