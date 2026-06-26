@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildCodexExecShellCommand,
   buildCodexPrompt,
+  buildGitSetupShellCommand,
   buildSandboxName,
   buildSandboxRuntimeConfig,
   isProbablyBinary,
@@ -69,5 +71,17 @@ describe("sandbox runner helpers", () => {
     expect(prompt).toContain("Create shell");
     expect(prompt).toContain("PROJECT_BRIEF.md");
     expect(prompt).toContain("All generated application code must stay inside /workspace.");
+  });
+
+  it("adds skip-git-repo-check to Codex exec commands", () => {
+    expect(buildCodexExecShellCommand("codex", "hello")).toBe("codex exec --skip-git-repo-check 'hello'");
+  });
+
+  it("builds a Sandbox git setup command for /workspace", () => {
+    const command = buildGitSetupShellCommand();
+
+    expect(command).toContain("dnf install -y git");
+    expect(command).toContain("cd /workspace");
+    expect(command).toContain("git init");
   });
 });

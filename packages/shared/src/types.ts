@@ -122,6 +122,7 @@ export interface RunEventRow {
   step: string | null;
   message: string | null;
   stream: string | null;
+  payload?: Record<string, unknown>;
   metadata: Record<string, unknown>;
   created_at: string;
 }

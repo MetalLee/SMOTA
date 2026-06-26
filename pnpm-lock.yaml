@@ -23,6 +23,9 @@ importers:
       '@smota/agent-core':
         specifier: workspace:*
         version: link:../../packages/agent-core
+      '@smota/sandbox-runner':
+        specifier: workspace:^
+        version: link:../../packages/sandbox-runner
       '@smota/shared':
         specifier: workspace:*
         version: link:../../packages/shared

@@ -76,3 +76,49 @@ Auth 使用 Supabase 邮箱密码注册和登录。未登录用户访问 `/dashb
 - 不创建 Local Runner。
 - 不创建 `apps/runner`。
 - 不执行 Vercel Sandbox、Codex CLI、安装、构建或 preview。
+
+## Phase 4: Vercel Sandbox Runner
+
+批准计划后，工作台会显示“启动 Vercel Sandbox 构建”按钮。该按钮调用服务端 API，在 Vercel Sandbox 内完成 Harness 写入、Vite React TypeScript 初始化、Codex CLI 执行、`pnpm install`、`pnpm build`、一次自动修复、文件索引、dev server 启动和 preview URL 写入。
+
+Sandbox SDK 封装在 `packages/sandbox-runner`。前端组件不得直接调用 `@vercel/sandbox`；所有 Sandbox SDK 调用只能出现在 runner 包或服务端 Route Handler 中。
+
+服务端 API：
+
+- `POST /api/runs/[runId]/sandbox/start`
+- `GET /api/runs/[runId]/sandbox/status`
+- `POST /api/runs/[runId]/sandbox/stop`
+- `GET /api/runs/[runId]/events`
+- `GET /api/projects/[projectId]/files/content?path=src/App.tsx`
+
+Sandbox workflow 会把 `sandbox_name`、`sandbox_status`、stdout/stderr、build 状态、修复状态、文件索引和 preview URL 写入 Supabase，避免函数中断后完全丢失状态。`run_events.payload` 使用 JSON；为兼容旧 UI，当前也同步写入 `metadata`。
+
+关键环境变量：
+
+```env
+SUPABASE_SERVICE_ROLE_KEY=
+SANDBOX_RUNTIME=node24
+SANDBOX_TIMEOUT_MS=2700000
+SANDBOX_PUBLISH_PORT=5173
+CODEX_CLI_COMMAND=codex
+CODEX_CLI_INSTALL_COMMAND=
+CODEX_API_KEY=
+OPENAI_API_KEY=
+VERCEL_SANDBOX_API_TOKEN=
+VERCEL_TOKEN=
+VERCEL_TEAM_ID=
+VERCEL_PROJECT_ID=
+```
+
+`SUPABASE_SERVICE_ROLE_KEY` 只允许服务端使用，绝不会注入 Sandbox。Sandbox 内只注入 Codex 所需的最小环境变量白名单。
+
+`sandbox/start` 使用 Node.js runtime，并设置 `maxDuration = 300`。Vercel Sandbox 自身最长运行时间取决于 Vercel 计划：Hobby 通常最多 45 分钟，Pro/Enterprise 最多 5 小时。如果当前计划不支持长时间函数，建议把 `/sandbox/start` 降级为只创建 Sandbox 和写入初始状态，再由 Vercel Workflow、队列任务或用户手动重试 API 继续执行后续步骤。
+
+MVP 阶段使用 Vercel Sandbox 隔离 AI 生成代码，但仍需关注网络外联、密钥注入和成本控制。后续可以增加 network policy，仅允许访问 npm registry、模型 API 和必要域名。
+
+## Phase 4 暂不实现
+
+- 不实现 Local Runner。
+- 不依赖本地 `generated-workspaces`。
+- 不创建 `apps/runner`。
+- 不把生成应用发布到生产环境。

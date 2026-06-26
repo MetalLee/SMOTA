@@ -1,0 +1,64 @@
+import { Sandbox } from "@vercel/sandbox";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { toSandboxEnvironment } from "./sandbox-security";
+
+export interface SandboxRuntimeConfig {
+  runtime: string;
+  timeoutMs: number;
+  publishPort: number;
+}
+
+export function buildSandboxRuntimeConfig(env: Record<string, string | undefined>): SandboxRuntimeConfig {
+  return {
+    runtime: env.SANDBOX_RUNTIME ?? env.SANDBOX_DEFAULT_RUNTIME ?? "node24",
+    timeoutMs: Number(env.SANDBOX_TIMEOUT_MS ?? env.SANDBOX_DEFAULT_TIMEOUT_MS ?? 2700000),
+    publishPort: Number(env.SANDBOX_PUBLISH_PORT ?? env.SANDBOX_PREVIEW_PORT ?? 5173)
+  };
+}
+
+export function buildSandboxName(ids: { ownerId: string; projectId: string; runId: string }): string {
+  return `smota-${ids.ownerId.slice(0, 8)}-${ids.projectId.slice(0, 8)}-${ids.runId.slice(0, 8)}`.toLowerCase();
+}
+
+export function createSupabaseServiceClient(env: Record<string, string | undefined> = process.env): SupabaseClient {
+  const url = env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!url || !serviceRoleKey) {
+    throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.");
+  }
+
+  return createClient(url, serviceRoleKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false
+    }
+  });
+}
+
+export async function createVercelSandbox(params: {
+  name: string;
+  config: SandboxRuntimeConfig;
+  env?: Record<string, string | undefined>;
+}) {
+  return Sandbox.create({
+    name: params.name,
+    runtime: params.config.runtime,
+    timeout: params.config.timeoutMs,
+    ports: [params.config.publishPort],
+    env: toSandboxEnvironment(params.env ?? process.env),
+    token: params.env?.VERCEL_SANDBOX_API_TOKEN ?? process.env.VERCEL_SANDBOX_API_TOKEN ?? process.env.VERCEL_TOKEN,
+    teamId: params.env?.VERCEL_TEAM_ID ?? process.env.VERCEL_TEAM_ID,
+    projectId: params.env?.VERCEL_PROJECT_ID ?? process.env.VERCEL_PROJECT_ID,
+    persistent: true
+  });
+}
+
+export async function getVercelSandbox(name: string) {
+  return Sandbox.get({
+    name,
+    token: process.env.VERCEL_SANDBOX_API_TOKEN ?? process.env.VERCEL_TOKEN,
+    teamId: process.env.VERCEL_TEAM_ID,
+    projectId: process.env.VERCEL_PROJECT_ID
+  });
+}

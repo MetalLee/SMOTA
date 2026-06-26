@@ -3,6 +3,7 @@ import { Bot, CheckCircle2, Circle, Clock, FileText, Monitor, PanelRight, Send, 
 import { approvePlanAction } from "@/app/actions/projects";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { StartSandboxButton } from "@/components/start-sandbox-button";
 import type { AgentRunRow, ArtifactRow, ProjectRow, RunEventRow, TaskRow, WorkspaceFileRow } from "@smota/shared";
 import { cn } from "@/lib/utils";
 
@@ -85,13 +86,17 @@ export function Workbench({ project, run, artifacts, tasks, events, files, activ
             <input className="min-w-0 flex-1 bg-transparent outline-none" placeholder="继续描述你想修改什么" disabled />
             <Send className="h-4 w-4" />
           </div>
-          <form action={approvePlanAction}>
-            <input type="hidden" name="projectId" value={project.id} />
-            <input type="hidden" name="runId" value={run.id} />
-            <Button type="submit" disabled={run.status === "approved"} className="w-full">
-              批准计划并启动 Vercel Sandbox 构建
-            </Button>
-          </form>
+          {run.status === "pending_approval" ? (
+            <form action={approvePlanAction}>
+              <input type="hidden" name="projectId" value={project.id} />
+              <input type="hidden" name="runId" value={run.id} />
+              <Button type="submit" className="w-full">
+                批准计划
+              </Button>
+            </form>
+          ) : (
+            <StartSandboxButton runId={run.id} enabled={run.status === "approved" || run.status === "failed_retryable"} />
+          )}
         </div>
       </aside>
 
@@ -131,9 +136,21 @@ export function Workbench({ project, run, artifacts, tasks, events, files, activ
           {selectedTab === "terminal" ? <TerminalTab events={events} /> : null}
           {selectedTab === "files" ? <FilesTab files={files} /> : null}
           {selectedTab === "editor" ? <EmptyState title="暂无可编辑文件" body="Monaco Editor 已预留，Phase 5 会通过服务端 API 读取 Sandbox 文件。" /> : null}
-          {selectedTab === "preview" ? <EmptyState title="等待 Vercel Sandbox 生成应用" body="本阶段只生成计划和 Artifact，不会启动 Sandbox 或 preview iframe。" /> : null}
+          {selectedTab === "preview" ? <PreviewTab previewUrl={run.sandbox_preview_url} /> : null}
         </section>
       </main>
+    </div>
+  );
+}
+
+function PreviewTab({ previewUrl }: { previewUrl: string | null }) {
+  if (!previewUrl) {
+    return <EmptyState title="等待 Vercel Sandbox 预览" body="Sandbox 构建成功后，这里会显示 Vite dev server 预览。" />;
+  }
+
+  return (
+    <div className="mx-auto h-[calc(100vh-8rem)] max-w-6xl overflow-hidden rounded-lg border border-border bg-white">
+      <iframe title="Sandbox preview" src={previewUrl} className="h-full w-full" />
     </div>
   );
 }
