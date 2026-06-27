@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 export interface PreviewScreenshotConfig {
@@ -84,8 +85,8 @@ export function assertRunnerChromiumAvailable({
 }
 
 export async function loadRunnerChromium(): Promise<RunnerChromium> {
-  const importPlaywright = new Function("return import('playwright')") as () => Promise<{ chromium: RunnerChromium }>;
-  const playwright = await importPlaywright();
+  const require = createRequire(import.meta.url);
+  const playwright = require("playwright") as { chromium: RunnerChromium };
   return playwright.chromium;
 }
 

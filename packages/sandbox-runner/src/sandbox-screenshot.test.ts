@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   buildPreviewScreenshotObjectPath,
@@ -41,6 +42,14 @@ describe("sandbox preview screenshots", () => {
 
   it("documents how to install Chromium on the Runner", () => {
     expect(getRunnerChromiumInstallCommand()).toBe("pnpm --filter @smota/sandbox-runner exec playwright install chromium");
+  });
+
+  it("keeps Playwright visible to the Next.js server bundle tracer", () => {
+    const source = readFileSync(new URL("./sandbox-screenshot.ts", import.meta.url), "utf8");
+
+    expect(source).toContain('require("playwright")');
+    expect(source).not.toContain("new Function");
+    expect(source).not.toContain("import('playwright')");
   });
 
   it("fails early when Runner Chromium is not installed", () => {

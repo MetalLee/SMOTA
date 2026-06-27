@@ -109,6 +109,8 @@ pnpm --filter @smota/sandbox-runner exec playwright install chromium
 
 仓库根 `postinstall` 会自动执行该安装步骤；如果部署环境禁用了 lifecycle scripts，需要在安装后手动运行上面的命令。
 
+Vercel Web Console 的服务端函数也必须能解析 `playwright` 包。`@smota/web` 直接声明 `playwright` 依赖，并在 Next.js 服务端构建中将 `playwright` / `playwright-core` 外部化，避免 webpack 内联 Playwright 内部 bundle，同时保证截图运行时可以从部署包加载该依赖。
+
 SMOTA 内置 LLM 默认使用 DeepSeek v4 Pro。DeepSeek API 兼容 OpenAI Chat Completions，因此这里复用 `OPENAI_API_KEY`、`OPENAI_BASE_URL` 和 `OPENAI_MODEL` 变量。`OPENAI_API_KEY` 可以直接填写 DeepSeek API key；也可以使用 `DEEPSEEK_API_KEY`。远程 Sandbox 会为 OpenCode 同时注入 `DEEPSEEK_API_KEY` 和 OpenAI-compatible 变量。
 
 ## Vercel Sandbox
