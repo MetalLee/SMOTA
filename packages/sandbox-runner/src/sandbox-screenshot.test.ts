@@ -52,6 +52,9 @@ describe("sandbox preview screenshots", () => {
       }
     });
 
+    expect(command).toContain("dnf install -y");
+    expect(command).toContain("nspr");
+    expect(command).toContain("nss");
     expect(command).toContain("npm exec --yes playwright@1.61.1 -- install chromium --only-shell");
     expect(command).toContain("npm exec --yes playwright@1.61.1 -- screenshot");
     expect(command).toContain("--wait-for-timeout 1500");

@@ -100,7 +100,7 @@ VERCEL_TEAM_ID=
 VERCEL_PROJECT_ID=
 ```
 
-`NEXT_PUBLIC_*` 会暴露给浏览器。`SUPABASE_SERVICE_ROLE_KEY`、模型密钥和 Vercel token 只能配置为服务端环境变量。`SUPABASE_PREVIEW_BUCKET` 是 Supabase Storage bucket 名称，bucket 需要公开访问。ReviewAgent 会在 Vercel Sandbox 内使用 Playwright Chromium headless shell 对构建完成后的 preview URL 截图；Web Function 只读取 Sandbox 里的 PNG bytes，上传 `image/png` 并将公开 URL 写入 `sandbox_runs.preview_image_url`。
+`NEXT_PUBLIC_*` 会暴露给浏览器。`SUPABASE_SERVICE_ROLE_KEY`、模型密钥和 Vercel token 只能配置为服务端环境变量。`SUPABASE_PREVIEW_BUCKET` 是 Supabase Storage bucket 名称，bucket 需要公开访问。ReviewAgent 会在 Vercel Sandbox 内先安装 Chromium headless shell 所需系统运行库，再使用 Playwright Chromium headless shell 对构建完成后的 preview URL 截图；Web Function 只读取 Sandbox 里的 PNG bytes，上传 `image/png` 并将公开 URL 写入 `sandbox_runs.preview_image_url`。
 
 SMOTA 内置 LLM 默认使用 DeepSeek v4 Pro。DeepSeek API 兼容 OpenAI Chat Completions，因此这里复用 `OPENAI_API_KEY`、`OPENAI_BASE_URL` 和 `OPENAI_MODEL` 变量。`OPENAI_API_KEY` 可以直接填写 DeepSeek API key；也可以使用 `DEEPSEEK_API_KEY`。远程 Sandbox 会为 OpenCode 同时注入 `DEEPSEEK_API_KEY` 和 OpenAI-compatible 变量。
 

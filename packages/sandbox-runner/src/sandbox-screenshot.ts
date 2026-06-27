@@ -52,6 +52,31 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
+export function buildSandboxChromiumDependenciesCommand() {
+  const packages = [
+    "alsa-lib",
+    "atk",
+    "at-spi2-atk",
+    "cairo",
+    "cups-libs",
+    "gtk3",
+    "libdrm",
+    "libX11",
+    "libXcomposite",
+    "libXdamage",
+    "libXext",
+    "libXfixes",
+    "libXrandr",
+    "libxkbcommon",
+    "mesa-libgbm",
+    "nspr",
+    "nss",
+    "pango"
+  ];
+
+  return `if command -v dnf >/dev/null 2>&1; then sudo dnf install -y ${packages.join(" ")}; fi`;
+}
+
 export function buildSandboxPreviewScreenshotCommand({
   previewUrl,
   config,
@@ -59,6 +84,7 @@ export function buildSandboxPreviewScreenshotCommand({
   playwrightVersion = "1.61.1"
 }: CapturePreviewScreenshotInput & { outputPath?: string; playwrightVersion?: string }) {
   return [
+    buildSandboxChromiumDependenciesCommand(),
     `npm exec --yes playwright@${playwrightVersion} -- install chromium --only-shell`,
     [
       `npm exec --yes playwright@${playwrightVersion} -- screenshot`,
