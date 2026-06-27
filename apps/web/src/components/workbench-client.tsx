@@ -7,9 +7,13 @@ import { useCallback, useEffect, useMemo, useState, useTransition } from "react"
 import {
   Bot,
   CheckCircle2,
+  ChevronRight,
   Circle,
   Clock,
+  File,
   FileText,
+  Folder,
+  FolderOpen,
   Loader2,
   Monitor,
   PanelRight,
@@ -30,14 +34,17 @@ import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import {
   formatBytes,
+  buildFileTree,
   getAgentDisplayStates,
   getEditorLanguage,
+  getExpandedDirectorySet,
   getFileContentErrorLabel,
   getLoadingOverlayClasses,
   getRunControls,
   getTaskDisplayStatus,
   getWorkbenchLayoutClasses,
-  type AgentDisplayName
+  type AgentDisplayName,
+  type FileTreeNode
 } from "@/lib/workbench";
 import type { AgentRunRow, ArtifactRow, ProjectRow, RunEventRow, TaskRow, WorkspaceFileRow } from "@smota/shared";
 
@@ -233,7 +240,7 @@ export function WorkbenchClient({
           {activeTab === "plan" ? <PlanTab artifacts={artifacts} /> : null}
           {activeTab === "terminal" ? <TerminalTab events={events} run={run} sandboxRun={sandboxRun} /> : null}
           {activeTab === "files" ? <FilesTab projectId={project.id} files={files} onNavigateStart={() => setWorkspaceNavigating(true)} /> : null}
-          {activeTab === "editor" ? <EditorTab projectId={project.id} filePath={selectedFilePath} /> : null}
+          {activeTab === "editor" ? <EditorTab projectId={project.id} filePath={selectedFilePath} files={files} onNavigateStart={() => setWorkspaceNavigating(true)} /> : null}
           {activeTab === "preview" ? <PreviewTab run={run} sandboxRun={sandboxRun} onRefresh={refreshAll} refreshing={previewRefreshing} /> : null}
           {workspaceNavigating ? <LoadingOverlay className={overlayClasses.workspaceOverlay} label="正在加载工作区" /> : null}
         </section>
@@ -523,10 +530,30 @@ function FilesTab({ projectId, files, onNavigateStart }: { projectId: string; fi
   );
 }
 
-function EditorTab({ projectId, filePath }: { projectId: string; filePath: string }) {
+function EditorTab({
+  projectId,
+  filePath,
+  files,
+  onNavigateStart
+}: {
+  projectId: string;
+  filePath: string;
+  files: WorkspaceFileRow[];
+  onNavigateStart: () => void;
+}) {
   const [content, setContent] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const fileTree = useMemo(() => buildFileTree(files.map((file) => file.path)), [files]);
+  const [expandedDirs, setExpandedDirs] = useState<Set<string>>(() => getExpandedDirectorySet(filePath));
+
+  useEffect(() => {
+    setExpandedDirs((current) => {
+      const next = new Set(current);
+      getExpandedDirectorySet(filePath).forEach((path) => next.add(path));
+      return next;
+    });
+  }, [filePath]);
 
   useEffect(() => {
     if (!filePath) return;
@@ -552,36 +579,137 @@ function EditorTab({ projectId, filePath }: { projectId: string; filePath: strin
     };
   }, [filePath, projectId]);
 
-  if (!filePath) {
-    return <EmptyState title="暂无可打开文件" body="在 Files Tab 点击文件后，会在这里以只读模式打开。" />;
+  function toggleDirectory(path: string) {
+    setExpandedDirs((current) => {
+      const next = new Set(current);
+      if (next.has(path)) {
+        next.delete(path);
+      } else {
+        next.add(path);
+      }
+      return next;
+    });
   }
 
   return (
-    <Card className="mx-auto flex h-[calc(100vh-8rem)] max-w-6xl flex-col overflow-hidden">
-      <div className="flex h-12 items-center justify-between border-b border-border px-4">
-        <div className="truncate text-sm font-semibold text-slate-700">{filePath}</div>
-        <div className="text-xs text-slate-400">read-only</div>
+    <Card className="mx-auto grid h-[calc(100vh-8rem)] max-w-7xl grid-cols-[280px_minmax(0,1fr)] overflow-hidden">
+      <div className="min-h-0 border-r border-border bg-slate-50/70">
+        <div className="flex h-12 items-center border-b border-border px-4 text-sm font-semibold text-slate-700">Files</div>
+        <div className="h-[calc(100%-3rem)] overflow-auto p-2">
+          {files.length ? (
+            <FileTree
+              nodes={fileTree.children}
+              projectId={projectId}
+              selectedPath={filePath}
+              expandedDirs={expandedDirs}
+              onToggleDirectory={toggleDirectory}
+              onNavigateStart={onNavigateStart}
+            />
+          ) : (
+            <div className="px-3 py-4 text-sm leading-6 text-slate-400">等待 Vercel Sandbox 生成文件</div>
+          )}
+        </div>
       </div>
-      {error ? (
-        <div className="flex flex-1 items-center justify-center p-8 text-center text-sm text-red-600">
-          <XCircle className="mr-2 h-4 w-4" />
-          {error}
+
+      <div className="min-w-0">
+        <div className="flex h-12 items-center justify-between border-b border-border px-4">
+          <div className="truncate text-sm font-semibold text-slate-700">{filePath || "未选择文件"}</div>
+          <div className="text-xs text-slate-400">read-only</div>
         </div>
-      ) : loading ? (
-        <div className="flex flex-1 items-center justify-center text-sm text-slate-400">
-          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          Loading file...
-        </div>
-      ) : (
-        <MonacoEditor
-          height="100%"
-          language={getEditorLanguage(filePath)}
-          value={content}
-          theme="vs"
-          options={{ readOnly: true, minimap: { enabled: false }, fontSize: 13, wordWrap: "on", scrollBeyondLastLine: false }}
-        />
-      )}
+        {!filePath ? (
+          <div className="flex h-[calc(100%-3rem)] items-center justify-center p-8 text-center text-sm text-slate-500">在左侧文件树选择文件后，会在这里以只读模式打开。</div>
+        ) : error ? (
+          <div className="flex h-[calc(100%-3rem)] items-center justify-center p-8 text-center text-sm text-red-600">
+            <XCircle className="mr-2 h-4 w-4" />
+            {error}
+          </div>
+        ) : loading ? (
+          <div className="flex h-[calc(100%-3rem)] items-center justify-center text-sm text-slate-400">
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            Loading file...
+          </div>
+        ) : (
+          <MonacoEditor
+            height="calc(100% - 3rem)"
+            language={getEditorLanguage(filePath)}
+            value={content}
+            theme="vs"
+            options={{ readOnly: true, minimap: { enabled: false }, fontSize: 13, wordWrap: "on", scrollBeyondLastLine: false }}
+          />
+        )}
+      </div>
     </Card>
+  );
+}
+
+function FileTree({
+  nodes,
+  projectId,
+  selectedPath,
+  expandedDirs,
+  onToggleDirectory,
+  onNavigateStart,
+  depth = 0
+}: {
+  nodes: FileTreeNode[];
+  projectId: string;
+  selectedPath: string;
+  expandedDirs: Set<string>;
+  onToggleDirectory: (path: string) => void;
+  onNavigateStart: () => void;
+  depth?: number;
+}) {
+  return (
+    <div className="space-y-0.5">
+      {nodes.map((node) => {
+        const paddingLeft = `${0.75 + depth * 0.9}rem`;
+
+        if (node.type === "directory") {
+          const expanded = expandedDirs.has(node.path);
+          return (
+            <div key={node.path}>
+              <button
+                type="button"
+                onClick={() => onToggleDirectory(node.path)}
+                className="flex h-8 w-full items-center gap-2 rounded-md pr-2 text-left text-sm font-medium text-slate-700 transition hover:bg-white"
+                style={{ paddingLeft }}
+              >
+                <ChevronRight className={cn("h-3.5 w-3.5 text-slate-400 transition", expanded && "rotate-90")} />
+                {expanded ? <FolderOpen className="h-4 w-4 text-slate-500" /> : <Folder className="h-4 w-4 text-slate-500" />}
+                <span className="truncate">{node.name}</span>
+              </button>
+              {expanded ? (
+                <FileTree
+                  nodes={node.children}
+                  projectId={projectId}
+                  selectedPath={selectedPath}
+                  expandedDirs={expandedDirs}
+                  onToggleDirectory={onToggleDirectory}
+                  onNavigateStart={onNavigateStart}
+                  depth={depth + 1}
+                />
+              ) : null}
+            </div>
+          );
+        }
+
+        return (
+          <WorkspaceLoadingLink
+            key={node.path}
+            href={`/projects/${projectId}?tab=editor&file=${encodeURIComponent(node.path)}`}
+            onNavigateStart={onNavigateStart}
+            className={cn(
+              "flex h-8 items-center gap-2 rounded-md pr-2 text-sm text-slate-600 transition hover:bg-white hover:text-ink",
+              selectedPath === node.path && "bg-primary/10 font-semibold text-primary hover:bg-primary/10 hover:text-primary"
+            )}
+            style={{ paddingLeft }}
+          >
+            <File className="h-4 w-4 shrink-0 text-slate-400" />
+            <span className="truncate">{node.name}</span>
+          </WorkspaceLoadingLink>
+        );
+      })}
+    </div>
   );
 }
 

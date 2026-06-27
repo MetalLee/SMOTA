@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   getAgentDisplayStates,
+  buildFileTree,
   getEditorLanguage,
+  getExpandedDirectorySet,
   getFileContentErrorLabel,
   getLoadingOverlayClasses,
   getRunControls,
@@ -101,5 +103,18 @@ describe("workbench helpers", () => {
     expect(classes.workspaceOverlay).toContain("inset-0");
     expect(classes.workspaceOverlay).toContain("backdrop-blur");
     expect(classes.panel).toContain("shadow");
+  });
+
+  it("builds a sorted nested file tree from workspace paths", () => {
+    const tree = buildFileTree(["src/components/Button.tsx", "src/App.tsx", "README.md"]);
+
+    expect(tree.children.map((node) => `${node.type}:${node.name}`)).toEqual(["directory:src", "file:README.md"]);
+    expect(tree.children[0]?.children.map((node) => `${node.type}:${node.name}`)).toEqual(["directory:components", "file:App.tsx"]);
+    expect(tree.children[0]?.children[0]?.children.map((node) => `${node.type}:${node.name}`)).toEqual(["file:Button.tsx"]);
+  });
+
+  it("expands every parent directory for the selected file", () => {
+    expect([...getExpandedDirectorySet("src/components/Button.tsx")]).toEqual(["src", "src/components"]);
+    expect([...getExpandedDirectorySet("README.md")]).toEqual([]);
   });
 });

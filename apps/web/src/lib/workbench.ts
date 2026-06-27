@@ -23,6 +23,13 @@ export interface LoadingOverlayClasses {
   panel: string;
 }
 
+export interface FileTreeNode {
+  name: string;
+  path: string;
+  type: "directory" | "file";
+  children: FileTreeNode[];
+}
+
 export interface AgentDisplayStateInput {
   runStatus: string;
   currentStep: string | null;
@@ -81,6 +88,50 @@ export function getLoadingOverlayClasses(): LoadingOverlayClasses {
     workspaceOverlay: "absolute inset-0 z-30 flex items-center justify-center bg-white/55 backdrop-blur-md",
     panel: "flex items-center gap-3 rounded-lg border border-border bg-white/85 px-4 py-3 text-sm font-semibold text-slate-700 shadow-soft"
   };
+}
+
+function sortFileTreeNodes(nodes: FileTreeNode[]) {
+  nodes.sort((a, b) => {
+    if (a.type !== b.type) return a.type === "directory" ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+  nodes.forEach((node) => sortFileTreeNodes(node.children));
+}
+
+export function buildFileTree(paths: string[]): FileTreeNode {
+  const root: FileTreeNode = { name: "", path: "", type: "directory", children: [] };
+
+  for (const filePath of paths) {
+    const segments = filePath.split("/").filter(Boolean);
+    let current = root;
+
+    segments.forEach((segment, index) => {
+      const path = segments.slice(0, index + 1).join("/");
+      const type: FileTreeNode["type"] = index === segments.length - 1 ? "file" : "directory";
+      let child = current.children.find((node) => node.name === segment && node.type === type);
+
+      if (!child) {
+        child = { name: segment, path, type, children: [] };
+        current.children.push(child);
+      }
+
+      current = child;
+    });
+  }
+
+  sortFileTreeNodes(root.children);
+  return root;
+}
+
+export function getExpandedDirectorySet(filePath: string): Set<string> {
+  const segments = filePath.split("/").filter(Boolean);
+  const expanded = new Set<string>();
+
+  for (let index = 0; index < segments.length - 1; index++) {
+    expanded.add(segments.slice(0, index + 1).join("/"));
+  }
+
+  return expanded;
 }
 
 export function getTaskDisplayStatus(taskStatus: string, runStatus: string, sandboxStatus: string | null): DisplayProgressStatus {
