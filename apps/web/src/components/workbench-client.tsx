@@ -27,7 +27,16 @@ import { approvePlanAction } from "@/app/actions/projects";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
-import { formatBytes, getEditorLanguage, getFileContentErrorLabel, getRunControls, getWorkbenchLayoutClasses } from "@/lib/workbench";
+import {
+  formatBytes,
+  getAgentDisplayStates,
+  getEditorLanguage,
+  getFileContentErrorLabel,
+  getRunControls,
+  getTaskDisplayStatus,
+  getWorkbenchLayoutClasses,
+  type AgentDisplayName
+} from "@/lib/workbench";
 import type { AgentRunRow, ArtifactRow, ProjectRow, RunEventRow, TaskRow, WorkspaceFileRow } from "@smota/shared";
 
 const MonacoEditor = dynamic(() => import("@monaco-editor/react"), {
@@ -35,7 +44,7 @@ const MonacoEditor = dynamic(() => import("@monaco-editor/react"), {
   loading: () => <div className="flex h-full items-center justify-center text-sm text-slate-400">Loading editor...</div>
 });
 
-const agents = ["ProductAgent", "ArchitectAgent", "PlannerAgent", "CodingAgent", "BuildAgent", "ReviewerAgent"];
+const agents: AgentDisplayName[] = ["ProductAgent", "ArchitectAgent", "PlannerAgent", "CodingAgent", "BuildAgent", "ReviewerAgent"];
 const tabs = [
   ["preview", "应用预览器", Monitor],
   ["editor", "编辑器", PanelRight],
@@ -82,7 +91,7 @@ export function WorkbenchClient({
   const [sandboxRun, setSandboxRun] = useState<SandboxRunSnapshot | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [loadingAction, setLoadingAction] = useState<"start" | "stop" | null>(null);
-  const [isRefreshing, startRefreshTransition] = useTransition();
+  const [, startRefreshTransition] = useTransition();
 
   const queryTab = searchParams.get("tab") ?? initialActiveTab;
   const activeTab = tabs.some(([key]) => key === queryTab) ? queryTab : "plan";
@@ -170,8 +179,7 @@ export function WorkbenchClient({
           actionError={actionError}
           onStart={startSandbox}
           onStop={stopSandbox}
-          onRefresh={refreshAll}
-          refreshing={isRefreshing}
+          layoutClasses={layoutClasses}
         />
       </aside>
 
@@ -228,8 +236,7 @@ function AgentPanel({
   actionError,
   onStart,
   onStop,
-  onRefresh,
-  refreshing
+  layoutClasses
 }: {
   project: ProjectRow;
   run: AgentRunRow;
@@ -240,115 +247,133 @@ function AgentPanel({
   actionError: string | null;
   onStart: () => Promise<void>;
   onStop: () => Promise<void>;
-  onRefresh: () => void;
-  refreshing: boolean;
+  layoutClasses: ReturnType<typeof getWorkbenchLayoutClasses>;
 }) {
-  const eventAgents = useMemo(() => new Set(events.map((event) => event.agent_name).filter(Boolean)), [events]);
+  const eventAgents = useMemo(() => new Set(events.map((event) => event.agent_name).filter((agentName): agentName is string => Boolean(agentName))), [events]);
+  const agentStates = useMemo(
+    () =>
+      getAgentDisplayStates({
+        runStatus: run.status,
+        currentStep: run.current_step,
+        sandboxStatus: run.sandbox_status,
+        buildStatus: run.build_status,
+        eventAgentNames: [...eventAgents]
+      }),
+    [eventAgents, run.build_status, run.current_step, run.sandbox_status, run.status]
+  );
 
   return (
-    <>
-      <div className="mb-6">
-        <div className="mb-3 flex items-center gap-2">
-          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary text-sm font-bold text-white">S</div>
-          <div className="text-sm font-bold">SMOTA</div>
-        </div>
-        <h1 className="text-xl font-bold">{project.name}</h1>
-        <p className="mt-2 text-sm leading-6 text-slate-500">{project.prompt}</p>
-      </div>
-
-      <div className="mb-4 grid grid-cols-2 gap-2">
-        <StatusPill label="Run" value={run.status} />
-        <StatusPill label="Sandbox" value={run.sandbox_status ?? "not_ready"} />
-      </div>
-
-      <div className="mb-6">
-        <div className="mb-3 text-sm font-semibold text-slate-700">Agent step timeline</div>
-        <div className="space-y-2">
-          {agents.map((agent) => {
-            const completed = eventAgents.has(agent);
-            const active = run.current_step?.toLowerCase().includes(agent.toLowerCase().replace("agent", "")) ?? false;
-            return (
-              <div key={agent} className="flex items-center gap-3 rounded-lg border border-border bg-slate-50 px-3 py-2">
-                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-primary">
-                  <Bot className="h-4 w-4" />
-                </div>
-                <span className="flex-1 text-sm font-medium text-slate-700">{agent}</span>
-                {completed ? (
-                  <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                ) : active ? (
-                  <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                ) : (
-                  <Clock className="h-4 w-4 text-slate-300" />
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="mb-6 rounded-lg border border-border p-4">
-        <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">当前阶段</div>
-        <div className="mt-2 text-sm font-semibold text-slate-700">{run.current_step ?? run.status}</div>
-        {run.build_error ? <div className="mt-2 line-clamp-3 text-xs leading-5 text-red-600">{run.build_error}</div> : null}
-      </div>
-
-      <div className="mb-6">
-        <div className="mb-3 text-sm font-semibold text-slate-700">task checklist</div>
-        <div className="space-y-2">
-          {tasks.map((task) => (
-            <div key={task.id} className="flex gap-2 text-sm text-slate-600">
-              {task.status === "done" ? <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-500" /> : <Circle className="mt-0.5 h-4 w-4 text-slate-300" />}
-              <div>
-                <div className="font-medium text-slate-700">{task.title}</div>
-                <div className="text-xs leading-5 text-slate-500">{task.description}</div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="mt-auto space-y-3">
-        <div className="flex items-center gap-2 rounded-lg border border-border bg-slate-50 px-3 py-2 text-sm text-slate-400">
-          <input className="min-w-0 flex-1 bg-transparent outline-none" placeholder="继续描述你想修改什么" disabled />
-          <Send className="h-4 w-4" />
-        </div>
-        {controls.primaryAction === "approve" ? (
-          <form action={approvePlanAction}>
-            <input type="hidden" name="projectId" value={project.id} />
-            <input type="hidden" name="runId" value={run.id} />
-            <Button type="submit" className="w-full">
-              批准计划
-            </Button>
-          </form>
-        ) : null}
-        {controls.primaryAction === "start" ? (
-          <Button type="button" disabled={loadingAction !== null} onClick={() => void onStart()} className="w-full">
-            {loadingAction === "start" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-            启动 Vercel Sandbox 构建
-          </Button>
-        ) : null}
-        {controls.primaryAction === "stop" ? (
-          <Button type="button" disabled={loadingAction !== null} onClick={() => void onStop()} className="w-full bg-slate-900 hover:bg-slate-700">
-            {loadingAction === "stop" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Square className="h-4 w-4" />}
-            停止 Sandbox
-          </Button>
-        ) : null}
-        {controls.primaryAction === "complete" ? (
-          <div className="flex h-10 items-center justify-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 text-sm font-semibold text-emerald-700">
-            <CheckCircle2 className="h-4 w-4" />
-            完成
+    <div className={layoutClasses.agentPanel}>
+      <div className={layoutClasses.agentPanelSummary}>
+        <div className="mb-6">
+          <div className="mb-3 flex items-center gap-2">
+            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary text-sm font-bold text-white">S</div>
+            <div className="text-sm font-bold">SMOTA</div>
           </div>
-        ) : null}
-        {controls.primaryAction === "error" ? (
-          <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">查看错误</div>
-        ) : null}
-        <Button type="button" onClick={onRefresh} className="w-full border-border bg-white text-slate-700 hover:bg-slate-50" disabled={refreshing}>
-          <RefreshCw className={cn("h-4 w-4", refreshing && "animate-spin")} />
-          刷新状态
-        </Button>
-        {actionError ? <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600">{actionError}</div> : null}
+          <h1 className="text-xl font-bold">{project.name}</h1>
+          <p className="mt-2 text-sm leading-6 text-slate-500">{project.prompt}</p>
+        </div>
+
+        <div className="mb-4 grid grid-cols-2 gap-2">
+          <StatusPill label="Run" value={run.status} />
+          <StatusPill label="Sandbox" value={run.sandbox_status ?? "not_ready"} />
+        </div>
+
+        <div className="mb-6">
+          <div className="mb-3 text-sm font-semibold text-slate-700">Agent step timeline</div>
+          <div className="space-y-2">
+            {agents.map((agent) => {
+              const displayStatus = agentStates[agent];
+              return (
+                <div key={agent} className="flex items-center gap-3 rounded-lg border border-border bg-slate-50 px-3 py-2">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-primary">
+                    <Bot className="h-4 w-4" />
+                  </div>
+                  <span className="flex-1 text-sm font-medium text-slate-700">{agent}</span>
+                  {displayStatus === "done" ? (
+                    <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                  ) : displayStatus === "in_progress" ? (
+                    <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                  ) : (
+                    <Clock className="h-4 w-4 text-slate-300" />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="mb-6 rounded-lg border border-border p-4">
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">当前阶段</div>
+          <div className="mt-2 text-sm font-semibold text-slate-700">{run.current_step ?? run.status}</div>
+          {run.build_error ? <div className="mt-2 line-clamp-3 text-xs leading-5 text-red-600">{run.build_error}</div> : null}
+        </div>
+
+        <div className="pb-6">
+          <div className="mb-3 text-sm font-semibold text-slate-700">task checklist</div>
+          <div className="space-y-2">
+            {tasks.map((task) => {
+              const displayStatus = getTaskDisplayStatus(task.status, run.status, run.sandbox_status);
+              return (
+                <div key={task.id} className="flex gap-2 text-sm text-slate-600">
+                  {displayStatus === "done" ? (
+                    <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-500" />
+                  ) : displayStatus === "in_progress" ? (
+                    <Loader2 className="mt-0.5 h-4 w-4 animate-spin text-primary" />
+                  ) : (
+                    <Circle className="mt-0.5 h-4 w-4 text-slate-300" />
+                  )}
+                  <div>
+                    <div className="font-medium text-slate-700">{task.title}</div>
+                    <div className="text-xs leading-5 text-slate-500">{task.description}</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
       </div>
-    </>
+
+      <div className={layoutClasses.agentPanelActions}>
+        <div className="space-y-3">
+          <div className="flex items-center gap-2 rounded-lg border border-border bg-slate-50 px-3 py-2 text-sm text-slate-400">
+            <input className="min-w-0 flex-1 bg-transparent outline-none" placeholder="继续描述你想修改什么" disabled />
+            <Send className="h-4 w-4" />
+          </div>
+          {controls.primaryAction === "approve" ? (
+            <form action={approvePlanAction}>
+              <input type="hidden" name="projectId" value={project.id} />
+              <input type="hidden" name="runId" value={run.id} />
+              <Button type="submit" className="w-full">
+                批准计划
+              </Button>
+            </form>
+          ) : null}
+          {controls.primaryAction === "start" ? (
+            <Button type="button" disabled={loadingAction !== null} onClick={() => void onStart()} className="w-full">
+              {loadingAction === "start" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+              启动 Vercel Sandbox 构建
+            </Button>
+          ) : null}
+          {controls.primaryAction === "stop" ? (
+            <Button type="button" disabled={loadingAction !== null} onClick={() => void onStop()} className="w-full bg-slate-900 hover:bg-slate-700">
+              {loadingAction === "stop" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Square className="h-4 w-4" />}
+              停止 Sandbox
+            </Button>
+          ) : null}
+          {controls.primaryAction === "complete" ? (
+            <div className="flex h-10 items-center justify-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 text-sm font-semibold text-emerald-700">
+              <CheckCircle2 className="h-4 w-4" />
+              完成
+            </div>
+          ) : null}
+          {controls.primaryAction === "error" ? (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">查看错误</div>
+          ) : null}
+          {actionError ? <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600">{actionError}</div> : null}
+        </div>
+      </div>
+    </div>
   );
 }
 

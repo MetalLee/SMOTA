@@ -157,6 +157,84 @@ pnpm --filter @smota/web typecheck
 
 Expected: both commands pass.
 
+### Task 4: Project Detail Agent Panel Fixed Actions
+
+**Files:**
+- Modify: `apps/web/src/lib/workbench.ts`
+- Modify: `apps/web/src/lib/workbench.test.ts`
+- Modify: `apps/web/src/components/workbench-client.tsx`
+
+- [x] **Step 1: Write the failing test**
+
+Extend `getWorkbenchLayoutClasses()` expectations so the project detail sidebar itself is `overflow-hidden`, the agent summary area is `overflow-y-auto`, and the action area is `shrink-0 border-t`.
+
+- [x] **Step 2: Run test to verify it fails**
+
+Run: `pnpm --filter @smota/web test -- src/lib/workbench.test.ts`
+
+Observed: FAIL because the sidebar still used `overflow-y-auto` and the Agent Panel section classes did not exist.
+
+- [x] **Step 3: Write minimal implementation**
+
+Add Agent Panel layout classes and render the panel as two vertical sections:
+
+- Scrollable summary section: project name, prompt, status, agent timeline, current stage, and task checklist.
+- Fixed action section: continue-description input and the current primary action button.
+
+Remove the always-visible `刷新状态` button from the fixed action section.
+
+- [x] **Step 4: Verify**
+
+Run:
+
+```bash
+pnpm --filter @smota/web test -- src/lib/workbench.test.ts
+pnpm --filter @smota/web typecheck
+```
+
+Expected: both commands pass.
+
+### Task 5: Project Detail Progress Icon Synchronization
+
+**Files:**
+- Modify: `apps/web/src/lib/workbench.ts`
+- Modify: `apps/web/src/lib/workbench.test.ts`
+- Modify: `apps/web/src/components/workbench-client.tsx`
+
+- [x] **Step 1: Investigate root cause**
+
+The Sandbox workflow updates `agent_runs.status`, `agent_runs.current_step`, `agent_runs.sandbox_status`, `agent_runs.build_status`, and `run_events`, but it does not continuously update persisted `tasks.status`. The left panel rendered task icons directly from `task.status`, so older runs could remain visually stale even after `run.status = succeeded` and `sandbox_status = previewing`.
+
+- [x] **Step 2: Write failing tests**
+
+Add tests for:
+
+- `getTaskDisplayStatus()` showing unfinished tasks as `in_progress` while a run is active and `done` when the run succeeds.
+- `getAgentDisplayStates()` marking CodingAgent/BuildAgent/ReviewerAgent from run, sandbox, build, and event progress.
+
+- [x] **Step 3: Implement display-state helpers**
+
+Add front-end display-state helpers that derive icons from persisted task status plus run/sandbox/build state. This keeps historical runs visually correct without requiring a migration or backfill.
+
+- [x] **Step 4: Use derived display state in Agent Panel**
+
+Render Agent timeline and task checklist icons from the derived display state:
+
+- `done`: green completed icon.
+- `in_progress`: spinning loader.
+- `todo`: neutral pending icon.
+
+- [x] **Step 5: Verify**
+
+Run:
+
+```bash
+pnpm --filter @smota/web test
+pnpm --filter @smota/web typecheck
+```
+
+Expected: both commands pass.
+
 ### Self-Review
 
 - Spec coverage: covers removing Template/Settings, moving recent projects into sidebar, and independent sidebar/main scrolling.

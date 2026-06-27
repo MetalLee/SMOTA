@@ -111,8 +111,10 @@ MVP 不需要 Local Runner。所有 AI 生成代码、依赖安装、构建和 d
 6. Sandbox 执行 `pnpm install` 和 `pnpm build`。
 7. 构建失败时只执行一次 OpenCode 自动修复。
 8. 扫描 `/workspace` 文件树，写入 `workspace_files`。
-9. 启动 `pnpm dev --host 0.0.0.0 --port 5173`。
+9. 写入 `smota.vite.config.ts` preview overlay，并启动 `pnpm dev --config smota.vite.config.ts --host 0.0.0.0 --port 5173 --strictPort`。
 10. 保存 `agent_runs.sandbox_preview_url`，工作台 Preview Tab 用 iframe 展示。
+
+`smota.vite.config.ts` 会 merge 生成应用的 `vite.config.ts`，并为 Sandbox preview 设置 `server.allowedHosts: true`，以接受 Vercel Sandbox 动态预览域名的 Host header。
 
 前端不能直接调用 `@vercel/sandbox`。文件内容通过服务端 API 读取：
 

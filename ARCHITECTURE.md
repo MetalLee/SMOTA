@@ -230,7 +230,8 @@ Sandbox 负责：
 ## Sandbox Preview 端口策略
 
 - MVP 使用单一默认发布端口：`5173`。
-- Vite 使用 `pnpm dev --host 0.0.0.0 --port 5173` 运行。
+- Vite 使用 `pnpm dev --config smota.vite.config.ts --host 0.0.0.0 --port 5173 --strictPort` 运行。
+- Runner 在启动 preview 前写入 `smota.vite.config.ts`，merge 生成应用的 `vite.config.ts` 并设置 `server.allowedHosts: true`，允许 Vercel Sandbox 动态预览域名访问 dev server。
 - 发布后的 preview URL 保存到 `sandbox_runs.preview_url` 和 `agent_runs.sandbox_preview_url`。
 - Web Console 在 iframe 中嵌入 preview URL。
 

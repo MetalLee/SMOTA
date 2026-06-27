@@ -83,6 +83,31 @@ export function buildGitSetupShellCommand(): string {
   ].join(" && ");
 }
 
+export function buildVitePreviewConfigContent(): string {
+  return `import { defineConfig, mergeConfig, type UserConfig } from 'vite';
+import userConfig from './vite.config';
+
+export default defineConfig(async (env) => {
+  const base = typeof userConfig === 'function' ? await userConfig(env) : await userConfig;
+
+  return mergeConfig(base as UserConfig, {
+    server: {
+      host: '0.0.0.0',
+      allowedHosts: true
+    },
+    preview: {
+      host: '0.0.0.0',
+      allowedHosts: true
+    }
+  });
+});
+`;
+}
+
+export function buildViteDevServerArgs(port: number): string[] {
+  return ["dev", "--config", "smota.vite.config.ts", "--host", "0.0.0.0", "--port", String(port), "--strictPort"];
+}
+
 async function upsertSandboxRun(
   supabase: SupabaseClient,
   context: RunContext,
@@ -320,6 +345,13 @@ export async function runVercelSandboxWorkflow(runId: string, options: WorkflowO
     await updateRunStatus(supabase, context, { build_status: "succeeded", current_step: "indexing_files" });
     await scanWorkspaceFiles({ sandbox, supabase, context });
 
+    await sandbox.writeFiles([
+      {
+        path: `${WORKSPACE_DIR}/smota.vite.config.ts`,
+        content: buildVitePreviewConfigContent()
+      }
+    ]);
+
     await updateRunStatus(supabase, context, { current_step: "starting_preview", sandbox_status: "previewing" });
     await startDetachedSandboxCommand({
       supabase,
@@ -327,7 +359,7 @@ export async function runVercelSandboxWorkflow(runId: string, options: WorkflowO
       sandbox,
       step: "dev_server",
       cmd: "pnpm",
-      args: ["dev", "--host", "0.0.0.0", "--port", String(config.publishPort)],
+      args: buildViteDevServerArgs(config.publishPort),
       cwd: WORKSPACE_DIR,
       timeoutMs: config.timeoutMs
     });

@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { getEditorLanguage, getFileContentErrorLabel, getRunControls, getWorkbenchLayoutClasses } from "./workbench";
+import {
+  getAgentDisplayStates,
+  getEditorLanguage,
+  getFileContentErrorLabel,
+  getRunControls,
+  getTaskDisplayStatus,
+  getWorkbenchLayoutClasses
+} from "./workbench";
 
 describe("workbench helpers", () => {
   it("maps run status to the available primary action", () => {
@@ -35,8 +42,52 @@ describe("workbench helpers", () => {
     expect(classes.root).toContain("h-screen");
     expect(classes.root).toContain("overflow-hidden");
     expect(classes.sidebar).toContain("h-screen");
-    expect(classes.sidebar).toContain("overflow-y-auto");
+    expect(classes.sidebar).toContain("overflow-hidden");
     expect(classes.main).toContain("h-screen");
     expect(classes.content).toContain("overflow-y-auto");
+  });
+
+  it("pins project detail actions below a scrollable agent panel summary", () => {
+    const classes = getWorkbenchLayoutClasses();
+
+    expect(classes.agentPanel).toContain("min-h-0");
+    expect(classes.agentPanelSummary).toContain("overflow-y-auto");
+    expect(classes.agentPanelSummary).toContain("flex-1");
+    expect(classes.agentPanelActions).toContain("shrink-0");
+    expect(classes.agentPanelActions).toContain("border-t");
+  });
+
+  it("derives running and completed task checklist display status from run progress", () => {
+    expect(getTaskDisplayStatus("todo", "running", "building")).toBe("in_progress");
+    expect(getTaskDisplayStatus("in_progress", "running", "building")).toBe("in_progress");
+    expect(getTaskDisplayStatus("todo", "succeeded", "previewing")).toBe("done");
+    expect(getTaskDisplayStatus("done", "running", "building")).toBe("done");
+  });
+
+  it("derives agent display states from persisted events and sandbox progress", () => {
+    const states = getAgentDisplayStates({
+      runStatus: "running",
+      currentStep: "building",
+      sandboxStatus: "building",
+      buildStatus: "running",
+      eventAgentNames: ["ProductAgent", "ArchitectAgent", "PlannerAgent"]
+    });
+
+    expect(states.ProductAgent).toBe("done");
+    expect(states.ArchitectAgent).toBe("done");
+    expect(states.PlannerAgent).toBe("done");
+    expect(states.CodingAgent).toBe("done");
+    expect(states.BuildAgent).toBe("in_progress");
+    expect(states.ReviewerAgent).toBe("todo");
+
+    expect(
+      getAgentDisplayStates({
+        runStatus: "succeeded",
+        currentStep: "succeeded",
+        sandboxStatus: "previewing",
+        buildStatus: "succeeded",
+        eventAgentNames: ["ProductAgent", "ArchitectAgent", "PlannerAgent"]
+      }).ReviewerAgent
+    ).toBe("done");
   });
 });

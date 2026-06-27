@@ -1,4 +1,6 @@
 export type PrimaryRunAction = "approve" | "start" | "stop" | "complete" | "error" | "none";
+export type DisplayProgressStatus = "todo" | "in_progress" | "done";
+export type AgentDisplayName = "ProductAgent" | "ArchitectAgent" | "PlannerAgent" | "CodingAgent" | "BuildAgent" | "ReviewerAgent";
 
 export interface FileContentErrorPayload {
   code?: string;
@@ -8,8 +10,19 @@ export interface FileContentErrorPayload {
 export interface WorkbenchLayoutClasses {
   root: string;
   sidebar: string;
+  agentPanel: string;
+  agentPanelSummary: string;
+  agentPanelActions: string;
   main: string;
   content: string;
+}
+
+export interface AgentDisplayStateInput {
+  runStatus: string;
+  currentStep: string | null;
+  sandboxStatus: string | null;
+  buildStatus: string | null;
+  eventAgentNames: string[];
 }
 
 const ERROR_LABELS: Record<string, string> = {
@@ -47,9 +60,46 @@ export function getRunControls(runStatus: string, sandboxStatus: string | null):
 export function getWorkbenchLayoutClasses(): WorkbenchLayoutClasses {
   return {
     root: "flex h-screen overflow-hidden bg-[#f6f7fb]",
-    sidebar: "flex h-screen w-[360px] shrink-0 flex-col overflow-y-auto border-r border-border bg-white p-5",
+    sidebar: "flex h-screen w-[360px] shrink-0 flex-col overflow-hidden border-r border-border bg-white p-5",
+    agentPanel: "flex min-h-0 flex-1 flex-col",
+    agentPanelSummary: "min-h-0 flex-1 overflow-y-auto pr-1",
+    agentPanelActions: "shrink-0 border-t border-border bg-white pt-4",
     main: "flex h-screen min-w-0 flex-1 flex-col overflow-hidden",
     content: "min-h-0 flex-1 overflow-y-auto p-6"
+  };
+}
+
+export function getTaskDisplayStatus(taskStatus: string, runStatus: string, sandboxStatus: string | null): DisplayProgressStatus {
+  if (taskStatus === "done" || runStatus === "succeeded") return "done";
+
+  if (
+    taskStatus === "in_progress" ||
+    runStatus === "running" ||
+    ["creating", "ready", "generating", "installing", "building", "fixing", "previewing"].includes(sandboxStatus ?? "")
+  ) {
+    return "in_progress";
+  }
+
+  return "todo";
+}
+
+export function getAgentDisplayStates(input: AgentDisplayStateInput): Record<AgentDisplayName, DisplayProgressStatus> {
+  const completedAgents = new Set(input.eventAgentNames);
+  const currentStep = input.currentStep?.toLowerCase() ?? "";
+  const sandboxStatus = input.sandboxStatus ?? "";
+  const buildStatus = input.buildStatus ?? "";
+  const runSucceeded = input.runStatus === "succeeded";
+  const sandboxStarted = ["creating", "ready", "generating", "installing", "building", "fixing", "previewing"].includes(sandboxStatus);
+  const codingDone = runSucceeded || ["installing", "building", "fixing", "previewing"].includes(sandboxStatus) || buildStatus === "running" || buildStatus === "succeeded";
+  const buildStarted = ["installing", "building", "fixing", "previewing"].includes(sandboxStatus) || buildStatus === "running" || buildStatus === "succeeded";
+
+  return {
+    ProductAgent: runSucceeded || completedAgents.has("ProductAgent") ? "done" : currentStep.includes("product") ? "in_progress" : "todo",
+    ArchitectAgent: runSucceeded || completedAgents.has("ArchitectAgent") ? "done" : currentStep.includes("architect") ? "in_progress" : "todo",
+    PlannerAgent: runSucceeded || completedAgents.has("PlannerAgent") ? "done" : currentStep.includes("planner") || currentStep.includes("plan") ? "in_progress" : "todo",
+    CodingAgent: runSucceeded || codingDone ? "done" : sandboxStarted || currentStep.includes("coding") || currentStep.includes("opencode") ? "in_progress" : "todo",
+    BuildAgent: runSucceeded || buildStatus === "succeeded" || sandboxStatus === "previewing" ? "done" : buildStarted ? "in_progress" : "todo",
+    ReviewerAgent: runSucceeded ? "done" : currentStep.includes("review") ? "in_progress" : "todo"
   };
 }
 

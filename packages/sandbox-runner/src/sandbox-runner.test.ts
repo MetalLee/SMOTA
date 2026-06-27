@@ -4,6 +4,8 @@ import {
   buildGitSetupShellCommand,
   buildOpenCodeConfig,
   buildOpenCodeRunShellCommand,
+  buildViteDevServerArgs,
+  buildVitePreviewConfigContent,
   buildSandboxCodingAgentEnvironment,
   buildSandboxName,
   buildSandboxRuntimeConfig,
@@ -137,5 +139,18 @@ describe("sandbox runner helpers", () => {
     expect(command).toContain("dnf install -y git");
     expect(command).toContain("cd /workspace");
     expect(command).toContain("git init");
+  });
+
+  it("builds a Vite preview overlay config that accepts Sandbox preview hostnames", () => {
+    const config = buildVitePreviewConfigContent();
+
+    expect(config).toContain("import userConfig from './vite.config'");
+    expect(config).toContain("allowedHosts: true");
+    expect(config).toContain("host: '0.0.0.0'");
+    expect(config).toContain("mergeConfig");
+  });
+
+  it("starts Vite dev with the SMOTA preview overlay config", () => {
+    expect(buildViteDevServerArgs(5173)).toEqual(["dev", "--config", "smota.vite.config.ts", "--host", "0.0.0.0", "--port", "5173", "--strictPort"]);
   });
 });
