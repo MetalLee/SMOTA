@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 export type RunEventType =
   | "run.status"
   | "step.status"
+  | "agent.reasoning"
   | "sandbox.created"
   | "sandbox.command.started"
   | "sandbox.command.stdout"
@@ -19,6 +20,7 @@ export type RunEventType =
   | "review.screenshot.started"
   | "review.screenshot.saved"
   | "review.screenshot.failed"
+  | "review.llm.failed"
   | "run.failed";
 
 export interface RunContext {

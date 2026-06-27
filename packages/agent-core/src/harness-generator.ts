@@ -62,5 +62,5 @@ export function generateHarnessBundle(input: ProjectCreationInput): HarnessBundl
     }
   ];
 
-  return { artifacts, tasks, events };
+  return { projectName, artifacts, tasks, events };
 }

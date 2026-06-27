@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { generateHarnessBundle } from "@smota/agent-core";
+import { createAgentOrchestrator, generateHarnessBundle } from "@smota/agent-core";
 import { deriveProjectName, parseProjectCreationInput } from "@smota/shared";
 import { createClient } from "@/lib/supabase/server";
 
@@ -23,8 +23,17 @@ async function requireUser() {
 export async function createProjectAction(formData: FormData) {
   const input = parseProjectCreationInput(formData);
   const { supabase, user } = await requireUser();
-  const bundle = generateHarnessBundle(input);
-  const projectName = deriveProjectName(input.prompt);
+  const fallbackBundle = generateHarnessBundle(input);
+  let bundle = fallbackBundle;
+  let planningError: string | null = null;
+
+  try {
+    bundle = await createAgentOrchestrator().generateHarnessBundle(input);
+  } catch (error) {
+    planningError = error instanceof Error ? error.message : "真实 LLM 规划生成失败，已回退到本地计划生成器。";
+  }
+
+  const projectName = bundle.projectName || deriveProjectName(input.prompt);
 
   const { data: project, error: projectError } = await supabase
     .from("projects")
@@ -96,6 +105,20 @@ export async function createProjectAction(formData: FormData) {
     stream: event.stream ?? "system",
     metadata: event.metadata ?? {}
   }));
+
+  if (planningError) {
+    events.push({
+      owner_id: user.id,
+      project_id: project.id,
+      run_id: run.id,
+      agent_name: "PlannerAgent",
+      event_type: "agent.reasoning",
+      step: "llm_fallback",
+      message: planningError,
+      stream: "stderr",
+      metadata: { fallback: true }
+    });
+  }
 
   const [{ error: artifactsError }, { error: tasksError }, { error: eventsError }] = await Promise.all([
     supabase.from("artifacts").insert(artifacts),

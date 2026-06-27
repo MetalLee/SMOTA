@@ -36,6 +36,7 @@ import {
   formatBytes,
   buildFileTree,
   getAgentDisplayStates,
+  getAgentReasoningEvents,
   getDashboardHref,
   getEditorLanguage,
   getExpandedDirectorySet,
@@ -286,6 +287,7 @@ function AgentPanel({
   layoutClasses: ReturnType<typeof getWorkbenchLayoutClasses>;
 }) {
   const eventAgents = useMemo(() => new Set(events.map((event) => event.agent_name).filter((agentName): agentName is string => Boolean(agentName))), [events]);
+  const reasoningEvents = useMemo(() => getAgentReasoningEvents(events), [events]);
   const dashboardHref = getDashboardHref();
   const agentStates = useMemo(
     () =>
@@ -345,6 +347,21 @@ function AgentPanel({
           <div className="mt-2 text-sm font-semibold text-slate-700">{run.current_step ?? run.status}</div>
           {run.build_error ? <div className="mt-2 line-clamp-3 text-xs leading-5 text-red-600">{run.build_error}</div> : null}
         </div>
+
+        {reasoningEvents.length ? (
+          <div className="mb-6 rounded-lg border border-border bg-white p-4">
+            <div className="mb-3 text-sm font-semibold text-slate-700">思考过程</div>
+            <div className="space-y-3">
+              {reasoningEvents.map((event, index) => (
+                <div key={`${event.agentName}-${index}`} className="text-xs leading-5 text-slate-500">
+                  <span className="font-semibold text-slate-700">{event.agentName}</span>
+                  <span className="mx-1 text-slate-300">/</span>
+                  {event.message}
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
 
         <div className="pb-6">
           <div className="mb-3 text-sm font-semibold text-slate-700">task checklist</div>

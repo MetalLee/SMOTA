@@ -50,6 +50,18 @@ export interface AgentDisplayStateInput {
   eventAgentNames: string[];
 }
 
+export interface ReasoningEventInput {
+  agent_name: string | null;
+  event_type: string;
+  message: string | null;
+  created_at: string;
+}
+
+export interface AgentReasoningEvent {
+  agentName: string;
+  message: string;
+}
+
 const ERROR_LABELS: Record<string, string> = {
   sandbox_not_ready: "Sandbox not ready",
   sandbox_stopped: "Sandbox stopped",
@@ -220,6 +232,16 @@ export function getAgentDisplayStates(input: AgentDisplayStateInput): Record<Age
     BuildAgent: runSucceeded || buildStatus === "succeeded" || sandboxStatus === "previewing" ? "done" : buildStarted ? "in_progress" : "todo",
     ReviewerAgent: runSucceeded ? "done" : currentStep.includes("review") ? "in_progress" : "todo"
   };
+}
+
+export function getAgentReasoningEvents(events: ReasoningEventInput[], limit = 4): AgentReasoningEvent[] {
+  return events
+    .filter((event) => event.event_type === "agent.reasoning" && Boolean(event.agent_name) && Boolean(event.message))
+    .slice(-limit)
+    .map((event) => ({
+      agentName: String(event.agent_name),
+      message: String(event.message)
+    }));
 }
 
 export function getFileContentErrorLabel(payload: FileContentErrorPayload): string {

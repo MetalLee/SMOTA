@@ -67,6 +67,8 @@
 
 - TypeScript 类型要清晰。
 - Supabase rows 和 API responses 优先使用显式数据模型。
+- ProductAgent、ArchitectAgent、PlannerAgent 和 ReviewerAgent 直接通过轻量 LLMProvider 调用 DeepSeek OpenAI-compatible API，不使用 LangChain。
+- 模型 `reasoning_content` 只能作为 `agent.reasoning` 事件写入 `run_events`，用于 UI 展示可审计进度摘要，不要把系统提示词或密钥暴露到前端或 Sandbox。
 - Sandbox 编排逻辑必须与 UI components 分离。
 - Agent 编排逻辑必须与渲染逻辑分离。
 - 重要状态转换前后都要持久化。

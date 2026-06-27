@@ -211,20 +211,25 @@ OPENCODE_CLI_INSTALL_COMMAND=npm install -g opencode-ai
 
 ## Agent LLM 接口
 
-后续 ProductAgent、ArchitectAgent、PlannerAgent、CodingAgent、BuildAgent 和 ReviewerAgent 接入真实 LLM 时，统一从 `packages/agent-core/src/llm.ts` 获取 LangChain 模型：
+ProductAgent、ArchitectAgent、PlannerAgent 和 ReviewerAgent 使用 `packages/agent-core` 内置的轻量 Agent Orchestrator，并通过 OpenAI-compatible Chat Completions 直接调用 DeepSeek，不经过 LangChain。
 
 ```ts
-import { createAgentChatModel } from "@smota/agent-core";
+import { createAgentOrchestrator, createOpenAiCompatibleLlmProvider } from "@smota/agent-core";
 
-const model = createAgentChatModel();
+const llm = createOpenAiCompatibleLlmProvider();
+const bundle = await createAgentOrchestrator({ llm }).generateHarnessBundle(input);
 ```
 
-该工厂返回 `@langchain/openai` 的 `ChatOpenAI` 实例，默认配置为：
+默认配置为：
 
 - provider：`deepseek`
 - model：`deepseek-v4-pro`
 - base URL：`https://api.deepseek.com`
 - temperature：`0.2`
+
+ProductAgent 会根据用户输入提炼项目名称并写入 `projects.name`，同时生成 `PROJECT_BRIEF.md`。ArchitectAgent 会生成 `ARCHITECTURE.md` 和 `CODEX_TASK_RULES.md`。PlannerAgent 会生成 `ROADMAP.md` 并汇总 `AGENTS.md`。ReviewerAgent 会在 Sandbox build 成功后读取 build result、`run_events`、文件索引和已知问题，生成 `REVIEW_REPORT.md`。
+
+DeepSeek 流式响应中的 `reasoning_content` 会被转换为 `run_events.event_type = 'agent.reasoning'`，用于项目详情页左侧 Agent Panel 的“思考过程”展示。这里展示的是可审计的 Agent 推理摘要流，不把系统提示词或服务端密钥写入 Sandbox。若未配置模型 key 或 LLM 调用失败，规划阶段会回退到本地 mock Harness 生成器，ReviewerAgent 会回退到确定性 Review Report。
 
 如需切到网关或其他 DeepSeek 兼容端点，只覆盖 `OPENAI_BASE_URL` 和 `OPENAI_MODEL`。不要在 Agent 代码里直接读取或传播 `SUPABASE_SERVICE_ROLE_KEY`。
 
@@ -243,6 +248,7 @@ const model = createAgentChatModel();
 `/projects/[id]` 包含：
 
 - 左侧 Agent Panel：项目名、原始需求、run 状态、Sandbox 状态、Agent timeline、task checklist、批准计划、启动 Sandbox、停止 Sandbox、刷新状态。
+- 左侧 Agent Panel：展示 `agent.reasoning` 事件中的最近思考过程，随工作区轮询刷新。
 - Terminal Tab：轮询 `run_events`，展示 Agent 状态、Sandbox 创建状态、OpenCode 输出、`pnpm install`、`pnpm build`、自动修复、preview ready。stdout 和 stderr 使用不同轻量样式。
 - Files Tab：轮询读取 `workspace_files`，展示创建过程中持续索引的 Harness、Vite 初始文件和 CodingAgent 生成文件。点击文件进入 Editor Tab。
 - Editor Tab：使用 Monaco Editor 只读展示 Sandbox 文件内容。文件内容仍通过服务端 API 从 Sandbox 读取，前端不直接调用 Sandbox SDK。

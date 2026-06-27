@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { createReviewerAgent, fallbackReviewReport } from "@smota/agent-core";
 import { buildSandboxName, buildSandboxRuntimeConfig, createSupabaseServiceClient, createVercelSandbox } from "./sandbox-client";
 import { commandOutput, runSandboxCommand, startDetachedSandboxCommand } from "./sandbox-commands";
 import { ensureWorkspace, scanWorkspaceFiles, writeHarnessArtifacts, WORKSPACE_DIR } from "./sandbox-files";
@@ -449,6 +450,65 @@ export async function runVercelSandboxWorkflow(runId: string, options: WorkflowO
         });
       }
     }
+    const [{ data: reviewEvents }, { data: reviewFiles }] = await Promise.all([
+      supabase
+        .from("run_events")
+        .select("event_type, message")
+        .eq("run_id", run.id)
+        .eq("owner_id", run.owner_id)
+        .order("created_at", { ascending: true })
+        .limit(80),
+      supabase
+        .from("workspace_files")
+        .select("path, change_type")
+        .eq("run_id", run.id)
+        .eq("owner_id", run.owner_id)
+        .order("path", { ascending: true })
+        .limit(200)
+    ]);
+    let reviewReport = fallbackReviewReport("Build succeeded.", previewUrl);
+
+    try {
+      const reasoningWrites: Array<Promise<void>> = [];
+      reviewReport = await createReviewerAgent().generateReport({
+        buildResult: `Build succeeded.\nPreview: ${previewUrl}`,
+        runEvents: (reviewEvents ?? []).map((event: { event_type: string; message: string | null }) => ({
+          eventType: event.event_type,
+          message: event.message
+        })),
+        files: (reviewFiles ?? []).map((file: { path: string; change_type: string | null }) => ({
+          path: file.path,
+          changeType: file.change_type
+        })),
+        knownIssues: [],
+        previewUrl,
+        onReasoning: (delta) => {
+          const message = delta.trim();
+          if (message) {
+            reasoningWrites.push(
+              insertRunEvent(supabase, context, {
+                eventType: "agent.reasoning",
+                agentName: "ReviewerAgent",
+                step: "review_report",
+                message
+              })
+            );
+          }
+        }
+      });
+      await Promise.all(reasoningWrites);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "ReviewerAgent LLM report failed.";
+      await insertRunEvent(supabase, context, {
+        eventType: "review.llm.failed",
+        agentName: "ReviewerAgent",
+        step: "review_report",
+        message,
+        stream: "stderr"
+      });
+      reviewReport = fallbackReviewReport(`Build succeeded.\nReviewerAgent LLM failed: ${message}`, previewUrl);
+    }
+
     await supabase.from("artifacts").insert({
       owner_id: context.ownerId,
       project_id: context.projectId,
@@ -456,7 +516,7 @@ export async function runVercelSandboxWorkflow(runId: string, options: WorkflowO
       type: "review_report",
       title: "Review Report",
       path: "REVIEW_REPORT.md",
-      content: `# Review Report\n\nBuild succeeded.\n\nPreview: ${previewUrl}${previewImageUrl ? `\n\nPreview screenshot: ${previewImageUrl}` : ""}\n`
+      content: previewImageUrl ? `${reviewReport}\n\nPreview screenshot: ${previewImageUrl}\n` : reviewReport
     });
     await insertRunEvent(supabase, context, { eventType: "artifact.created", step: "review_report", message: "Created Review Report artifact." });
     await insertRunEvent(supabase, context, { eventType: "preview.ready", step: "preview", message: `Preview is ready: ${previewUrl}`, payload: { previewUrl } });

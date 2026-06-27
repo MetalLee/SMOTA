@@ -39,7 +39,7 @@ export interface GeneratedTask {
 
 export interface GeneratedRunEvent {
   agentName: AgentName;
-  eventType: "agent.completed" | "run.created" | "plan.approved";
+  eventType: "agent.started" | "agent.reasoning" | "agent.completed" | "run.created" | "plan.approved";
   step: string;
   message: string;
   stream?: "stdout" | "stderr" | "system";
@@ -47,6 +47,7 @@ export interface GeneratedRunEvent {
 }
 
 export interface HarnessBundle {
+  projectName?: string;
   artifacts: HarnessArtifact[];
   tasks: GeneratedTask[];
   events: GeneratedRunEvent[];

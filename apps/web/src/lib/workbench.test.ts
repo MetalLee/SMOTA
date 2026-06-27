@@ -9,6 +9,7 @@ import {
   getWorkbenchHeaderActions,
   getFileContentErrorLabel,
   getLoadingOverlayClasses,
+  getAgentReasoningEvents,
   getRunControls,
   getTaskDisplayStatus,
   getWorkbenchLayoutClasses,
@@ -122,6 +123,19 @@ describe("workbench helpers", () => {
 
   it("uses dashboard as the workbench brand destination", () => {
     expect(getDashboardHref()).toBe("/dashboard");
+  });
+
+  it("keeps recent agent reasoning events for the left panel", () => {
+    expect(
+      getAgentReasoningEvents(
+        [
+          { agent_name: "ProductAgent", event_type: "agent.reasoning", message: "明确目标用户", created_at: "2026-06-28T00:00:00.000Z" },
+          { agent_name: "PlannerAgent", event_type: "agent.completed", message: "完成计划", created_at: "2026-06-28T00:00:01.000Z" },
+          { agent_name: "ArchitectAgent", event_type: "agent.reasoning", message: "确定安全边界", created_at: "2026-06-28T00:00:02.000Z" }
+        ],
+        1
+      )
+    ).toEqual([{ agentName: "ArchitectAgent", message: "确定安全边界" }]);
   });
 
   it("describes realtime Sandbox visibility in Preview, Editor, and Files empty states", () => {
