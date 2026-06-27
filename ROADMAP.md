@@ -54,7 +54,7 @@
 ### 不做什么
 
 - 不做 Sandbox Runner。
-- 不执行 Codex CLI。
+- 不执行 OpenCode CLI。
 - 不集成 Monaco Editor。
 - 不将生成应用部署到生产环境。
 
@@ -129,7 +129,7 @@
 - 持久化 sandbox name、status、runtime、timeout 和 preview metadata。
 - 将 Harness 文件写入 `/workspace`。
 - 初始化 Vite React TypeScript 应用。
-- 在 Sandbox 内执行 Codex CLI。
+- 在 Sandbox 内执行 OpenCode CLI。
 - 执行 `pnpm install`。
 - 执行 `pnpm build`。
 - 构建失败时自动修复一次。

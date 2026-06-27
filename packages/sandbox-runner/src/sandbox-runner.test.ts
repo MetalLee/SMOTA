@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildCodexExecShellCommand,
-  buildCodexPrompt,
+  buildCodingAgentPrompt,
   buildGitSetupShellCommand,
+  buildOpenCodeConfig,
+  buildOpenCodeRunShellCommand,
+  buildSandboxCodingAgentEnvironment,
   buildSandboxName,
   buildSandboxRuntimeConfig,
+  getVercelSandboxToken,
   isProbablyBinary,
   sanitizeWorkspacePath,
   toSandboxEnvironment
@@ -29,17 +32,66 @@ describe("sandbox runner helpers", () => {
     });
   });
 
+  it("resolves Vercel Sandbox tokens from Sandbox token, OIDC token, then Vercel token", () => {
+    expect(
+      getVercelSandboxToken({
+        VERCEL_SANDBOX_API_TOKEN: "sandbox-token",
+        VERCEL_OIDC_TOKEN: "oidc-token",
+        VERCEL_TOKEN: "vercel-token"
+      })
+    ).toBe("sandbox-token");
+    expect(getVercelSandboxToken({ VERCEL_OIDC_TOKEN: "oidc-token", VERCEL_TOKEN: "vercel-token" })).toBe("oidc-token");
+    expect(getVercelSandboxToken({ VERCEL_TOKEN: "vercel-token" })).toBe("vercel-token");
+  });
+
   it("keeps Supabase service role keys out of Sandbox environment", () => {
     expect(
       toSandboxEnvironment({
         CODEX_API_KEY: "codex-secret",
+        DEEPSEEK_API_KEY: "deepseek-secret",
         OPENAI_API_KEY: "openai-secret",
+        OPENAI_BASE_URL: "https://models.example.test",
+        OPENAI_MODEL: "gpt-test",
         SUPABASE_SERVICE_ROLE_KEY: "must-not-leak",
         NEXT_PUBLIC_SUPABASE_URL: "https://example.supabase.co"
       })
     ).toEqual({
-      CODEX_API_KEY: "codex-secret",
-      OPENAI_API_KEY: "openai-secret"
+      DEEPSEEK_API_KEY: "deepseek-secret",
+      OPENAI_API_KEY: "openai-secret",
+      OPENAI_BASE_URL: "https://models.example.test",
+      OPENAI_MODEL: "gpt-test"
+    });
+  });
+
+  it("defaults OpenCode in Sandbox to DeepSeek v4 Pro while preserving secret boundaries", () => {
+    expect(
+      buildSandboxCodingAgentEnvironment({
+        DEEPSEEK_API_KEY: "deepseek-key",
+        SUPABASE_SERVICE_ROLE_KEY: "must-not-leak"
+      })
+    ).toEqual({
+      OPENAI_API_KEY: "deepseek-key",
+      OPENAI_BASE_URL: "https://api.deepseek.com",
+      OPENAI_MODEL: "deepseek-v4-pro",
+      DEEPSEEK_API_KEY: "deepseek-key"
+    });
+  });
+
+  it("builds an OpenCode config for the configured DeepSeek v4 Pro model", () => {
+    expect(JSON.parse(buildOpenCodeConfig({ model: "deepseek/deepseek-v4-pro" }))).toEqual({
+      $schema: "https://opencode.ai/config.json",
+      model: "deepseek/deepseek-v4-pro",
+      small_model: "deepseek/deepseek-v4-pro",
+      share: "disabled",
+      autoupdate: false,
+      provider: {
+        deepseek: {
+          options: {
+            apiKey: "{env:DEEPSEEK_API_KEY}",
+            baseURL: "https://api.deepseek.com"
+          }
+        }
+      }
     });
   });
 
@@ -54,8 +106,8 @@ describe("sandbox runner helpers", () => {
     expect(isProbablyBinary(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00]))).toBe(true);
   });
 
-  it("builds a Codex prompt from tasks and harness artifacts", () => {
-    const prompt = buildCodexPrompt({
+  it("builds a CodingAgent prompt from tasks and harness artifacts", () => {
+    const prompt = buildCodingAgentPrompt({
       projectPrompt: "Build a booking dashboard",
       tasks: [
         { title: "Create shell", description: "Add the primary layout" },
@@ -73,8 +125,10 @@ describe("sandbox runner helpers", () => {
     expect(prompt).toContain("All generated application code must stay inside /workspace.");
   });
 
-  it("adds skip-git-repo-check to Codex exec commands", () => {
-    expect(buildCodexExecShellCommand("codex", "hello")).toBe("codex exec --skip-git-repo-check 'hello'");
+  it("builds OpenCode run commands for the DeepSeek v4 Pro build agent", () => {
+    expect(buildOpenCodeRunShellCommand("opencode", "deepseek/deepseek-v4-pro", "hello")).toBe(
+      "opencode run --model deepseek/deepseek-v4-pro --agent build --dangerously-skip-permissions 'hello'"
+    );
   });
 
   it("builds a Sandbox git setup command for /workspace", () => {

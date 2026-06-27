@@ -4,7 +4,7 @@ import { commandOutput, runSandboxCommand, startDetachedSandboxCommand } from ".
 import { ensureWorkspace, scanWorkspaceFiles, writeHarnessArtifacts, WORKSPACE_DIR } from "./sandbox-files";
 import { insertRunEvent, updateRunStatus, type RunContext } from "./sandbox-events";
 import { getSandboxPreviewUrl } from "./sandbox-preview";
-import { toSandboxEnvironment } from "./sandbox-security";
+import { DEEPSEEK_OPENAI_BASE_URL, DEEPSEEK_V4_PRO_MODEL, OPENCODE_DEEPSEEK_V4_PRO_MODEL, buildSandboxCodingAgentEnvironment } from "./sandbox-security";
 
 const HARNESS_PATHS = ["PROJECT_BRIEF.md", "ARCHITECTURE.md", "ROADMAP.md", "CODEX_TASK_RULES.md", "AGENTS.md"];
 
@@ -13,7 +13,7 @@ interface WorkflowOptions {
   env?: Record<string, string | undefined>;
 }
 
-export function buildCodexPrompt(input: {
+export function buildCodingAgentPrompt(input: {
   projectPrompt: string;
   tasks: Array<{ title: string; description: string | null }>;
   artifacts: Array<{ path: string; content: string }>;
@@ -41,8 +41,38 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-export function buildCodexExecShellCommand(codexCommand: string, prompt: string): string {
-  return `${codexCommand} exec --skip-git-repo-check ${shellQuote(prompt)}`;
+export function buildOpenCodeModel(env: Record<string, string | undefined> = process.env): string {
+  if (env.OPENCODE_MODEL) {
+    return env.OPENCODE_MODEL;
+  }
+  const model = env.OPENAI_MODEL || DEEPSEEK_V4_PRO_MODEL;
+  return model.includes("/") ? model : `deepseek/${model}`;
+}
+
+export function buildOpenCodeConfig(input: { model: string; baseUrl?: string }): string {
+  return JSON.stringify(
+    {
+      $schema: "https://opencode.ai/config.json",
+      model: input.model,
+      small_model: input.model,
+      share: "disabled",
+      autoupdate: false,
+      provider: {
+        deepseek: {
+          options: {
+            apiKey: "{env:DEEPSEEK_API_KEY}",
+            baseURL: input.baseUrl ?? DEEPSEEK_OPENAI_BASE_URL
+          }
+        }
+      }
+    },
+    null,
+    2
+  );
+}
+
+export function buildOpenCodeRunShellCommand(opencodeCommand: string, model: string, prompt: string): string {
+  return `${opencodeCommand} run --model ${model} --agent build --dangerously-skip-permissions ${shellQuote(prompt)}`;
 }
 
 export function buildGitSetupShellCommand(): string {
@@ -92,6 +122,9 @@ export async function runVercelSandboxWorkflow(runId: string, options: WorkflowO
 
   const context: RunContext = { ownerId: run.owner_id, projectId: run.project_id, runId: run.id };
   const config = buildSandboxRuntimeConfig(env);
+  const codingAgentEnv = buildSandboxCodingAgentEnvironment(env);
+  const opencodeCommand = env.OPENCODE_CLI_COMMAND ?? "opencode";
+  const opencodeModel = buildOpenCodeModel(env);
   const sandboxName = buildSandboxName({ ownerId: run.owner_id, projectId: run.project_id, runId: run.id });
 
   try {
@@ -170,71 +203,77 @@ export async function runVercelSandboxWorkflow(runId: string, options: WorkflowO
       timeoutMs: 10 * 60 * 1000
     });
 
-    if (env.CODEX_CLI_INSTALL_COMMAND) {
+    if (env.OPENCODE_CLI_INSTALL_COMMAND) {
       await runSandboxCommand({
         supabase,
         context,
         sandbox,
-        step: "install_codex_cli",
+        step: "install_opencode_cli",
         cmd: "bash",
-        args: ["-lc", env.CODEX_CLI_INSTALL_COMMAND],
+        args: ["-lc", env.OPENCODE_CLI_INSTALL_COMMAND],
         cwd: WORKSPACE_DIR,
-        env: toSandboxEnvironment(env),
+        env: codingAgentEnv,
         timeoutMs: 15 * 60 * 1000
       });
     }
 
-    const codexCommand = env.CODEX_CLI_COMMAND ?? "codex";
-    const codexCheck = await runSandboxCommand({
+    const opencodeCheck = await runSandboxCommand({
       supabase,
       context,
       sandbox,
-      step: "check_codex_cli",
+      step: "check_opencode_cli",
       cmd: "bash",
-      args: ["-lc", `${codexCommand} --version >/dev/null 2>&1`],
+      args: ["-lc", `${opencodeCommand} --version >/dev/null 2>&1`],
       cwd: WORKSPACE_DIR,
-      env: toSandboxEnvironment(env),
+      env: codingAgentEnv,
       timeoutMs: 60 * 1000
     });
 
-    if (codexCheck.exitCode !== 0) {
-      const message = "Codex CLI not found in Vercel Sandbox. Please configure CODEX_CLI_INSTALL_COMMAND or CODEX_CLI_COMMAND.";
+    if (opencodeCheck.exitCode !== 0) {
+      const message = "OpenCode CLI not found in Vercel Sandbox. Please configure OPENCODE_CLI_INSTALL_COMMAND or OPENCODE_CLI_COMMAND.";
       await insertRunEvent(supabase, context, {
         eventType: "run.failed",
-        step: "check_codex_cli",
+        step: "check_opencode_cli",
         message,
         stream: "stderr"
       });
       await updateRunStatus(supabase, context, {
         status: "failed",
         sandbox_status: "failed",
-        current_step: "codex_cli_missing",
+        current_step: "opencode_cli_missing",
         build_error: message
       });
       await supabase.from("sandbox_runs").update({ status: "failed", last_error: message }).eq("run_id", run.id);
       return { status: "failed", reason: message };
     }
 
-    const taskPrompt = buildCodexPrompt({
+    await sandbox.writeFiles([
+      {
+        path: `${WORKSPACE_DIR}/opencode.json`,
+        content: buildOpenCodeConfig({ model: opencodeModel, baseUrl: env.OPENAI_BASE_URL || DEEPSEEK_OPENAI_BASE_URL })
+      }
+    ]);
+
+    const taskPrompt = buildCodingAgentPrompt({
       projectPrompt: project.prompt ?? run.user_prompt,
       tasks: tasks ?? [],
       artifacts: harnessArtifacts
     });
 
-    await updateRunStatus(supabase, context, { current_step: "running_codex", sandbox_status: "generating" });
-    const codexRun = await runSandboxCommand({
+    await updateRunStatus(supabase, context, { current_step: "running_opencode", sandbox_status: "generating" });
+    const opencodeRun = await runSandboxCommand({
       supabase,
       context,
       sandbox,
-      step: "codex_exec",
+      step: "opencode_run",
       cmd: "bash",
-      args: ["-lc", buildCodexExecShellCommand(codexCommand, taskPrompt)],
+      args: ["-lc", buildOpenCodeRunShellCommand(opencodeCommand, opencodeModel, taskPrompt)],
       cwd: WORKSPACE_DIR,
-      env: toSandboxEnvironment(env),
+      env: codingAgentEnv,
       timeoutMs: config.timeoutMs
     });
-    if (codexRun.exitCode !== 0) {
-      throw new Error(await commandOutput(codexRun));
+    if (opencodeRun.exitCode !== 0) {
+      throw new Error(await commandOutput(opencodeRun));
     }
 
     await runSandboxCommand({ supabase, context, sandbox, step: "corepack", cmd: "corepack", args: ["enable"], cwd: WORKSPACE_DIR });
@@ -250,18 +289,18 @@ export async function runVercelSandboxWorkflow(runId: string, options: WorkflowO
       await insertRunEvent(supabase, context, { eventType: "build.failed", step: "build", message: buildError, stream: "stderr" });
 
       if (!run.fix_attempted) {
-        await insertRunEvent(supabase, context, { eventType: "fix.started", step: "fix", message: "Starting one automatic Codex repair attempt." });
+        await insertRunEvent(supabase, context, { eventType: "fix.started", step: "fix", message: "Starting one automatic OpenCode repair attempt." });
         await updateRunStatus(supabase, context, { current_step: "fixing", fix_attempted: true, sandbox_status: "fixing", build_error: buildError });
         const fixPrompt = `${taskPrompt}\n\nThe build failed. Fix the application once. Build error:\n${buildError}`;
         await runSandboxCommand({
           supabase,
           context,
           sandbox,
-          step: "codex_fix",
+          step: "opencode_fix",
           cmd: "bash",
-          args: ["-lc", buildCodexExecShellCommand(codexCommand, fixPrompt)],
+          args: ["-lc", buildOpenCodeRunShellCommand(opencodeCommand, opencodeModel, fixPrompt)],
           cwd: WORKSPACE_DIR,
-          env: toSandboxEnvironment(env),
+          env: codingAgentEnv,
           timeoutMs: config.timeoutMs
         });
         await insertRunEvent(supabase, context, { eventType: "fix.finished", step: "fix", message: "Automatic repair attempt finished." });

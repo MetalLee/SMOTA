@@ -1,6 +1,6 @@
 # SMOTA Dev Agent
 
-SMOTA 是一个 Atoms-like AI app builder 控制台。本阶段实现 Next.js + Supabase 平台骨架、邮箱密码认证、项目创建、项目内 Harness Artifact 生成，以及计划审批工作台。
+SMOTA 是一个 Atoms-like AI app builder 控制台。用户登录后用一句话创建项目，平台生成五个 Harness Artifact，用户批准计划后由 Vercel Sandbox 执行 OpenCode CLI、安装、构建、一次自动修复、文件索引和预览。
 
 ## 本地启动
 
@@ -17,14 +17,13 @@ cp .env.example .env.local
 cp .env.example apps/web/.env.local
 ```
 
-填入 Supabase 项目的公开变量：
+本地开发时，Next.js 运行在 `apps/web` 包内，因此 `apps/web/.env.local` 至少需要：
 
 ```env
 NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
 ```
-
-本地开发时，Next.js 实际运行在 `apps/web` 包内，因此 `apps/web/.env.local` 必须包含 Supabase 变量。根目录 `.env.local` 可作为 workspace 级别配置保留。
 
 启动 Web：
 
@@ -32,93 +31,193 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=
 pnpm dev
 ```
 
-默认会启动 `apps/web` 的 Next.js App Router 应用。
+## Supabase 项目
 
-## Supabase 配置
+1. 在 Supabase 控制台创建新项目。
+2. 在 Project Settings 复制 Project URL 和 anon public key，填入 `NEXT_PUBLIC_SUPABASE_URL`、`NEXT_PUBLIC_SUPABASE_ANON_KEY`。
+3. 在 Project Settings 的 API 页面复制 service role key，只填入服务端环境变量 `SUPABASE_SERVICE_ROLE_KEY`。
+4. 在 SQL Editor 依次执行迁移：
 
-在 Supabase 项目中依次执行：
+```sql
+-- supabase/migrations/0001_init.sql
+-- supabase/migrations/0002_rls.sql
+-- supabase/migrations/0003_sandbox_runner.sql
+```
 
-- `supabase/migrations/0001_init.sql`
-- `supabase/migrations/0002_rls.sql`
+迁移会创建 `projects`、`agent_runs`、`tasks`、`artifacts`、`workspace_files`、`run_events`、`sandbox_runs` 等业务表。所有业务表都包含 `owner_id` 并启用 RLS，用户只能读取和修改自己的数据。
 
-迁移会创建 `profiles`、`projects`、`agent_runs`、`agent_steps`、`tasks`、`artifacts`、`workspace_files`、`run_events`、`settings` 和 `sandbox_runs`。所有业务表都包含 `owner_id`，并启用 RLS，策略限制用户只能访问自己的数据。
+## Supabase Auth
 
-Auth 使用 Supabase 邮箱密码注册和登录。未登录用户访问 `/dashboard`、`/projects/*` 和 `/runs/*` 会自动跳转到 `/auth/login`。
+MVP 使用 Supabase 邮箱密码认证：
 
-## 当前能力
+1. 在 Authentication > Providers 启用 Email。
+2. 开发阶段可关闭 Confirm email，生产环境建议开启邮件确认并配置 SMTP。
+3. 在 URL Configuration 设置 Site URL 为 Vercel 生产域名，本地调试添加 `http://localhost:3000` 到 Redirect URLs。
 
-- `/auth/signup`：邮箱密码注册。
-- `/auth/login`：邮箱密码登录。
-- `/dashboard`：Atoms 风格首页，可输入一句话创建项目。
-- `/projects/[id]`：左侧 Agent Panel，右侧 Preview、Editor、Plan、Terminal、Files tabs。
-- `/runs/[id]`：跳转到对应项目工作台。
-
-项目创建会写入 `projects` 和 `agent_runs`，生成五个项目内 Harness Artifact，并记录 ProductAgent、ArchitectAgent、PlannerAgent 完成事件。批准按钮只把 run 状态更新为 `approved` 并写入 `run_events`，本阶段不会启动 Vercel Sandbox。
+未登录用户访问 `/dashboard`、`/projects/*`、`/runs/*` 会跳转到 `/auth/login`。
 
 ## Vercel 部署
 
-当前仓库根目录 `D:\Codex Workspace\SMOTA` 就是正式项目根目录。Vercel 的 Root Directory 保持为空或指向仓库根目录即可，不再使用嵌套的 `smota-dev-agent` 目录。
+仓库根目录包含 `vercel.json`。在 Vercel 创建项目时：
 
-在 Vercel 项目中配置 `.env.example` 中列出的环境变量。
+1. Root Directory 保持仓库根目录。
+2. Framework 使用 Next.js。
+3. Install Command 使用 `pnpm install --frozen-lockfile`。
+4. Build Command 使用 `pnpm --filter @smota/web build`。
+5. Output Directory 使用 `apps/web/.next`。
 
-生产环境部署在 Vercel 时，后续 Vercel Sandbox Runner 优先使用 Vercel OIDC 自动认证。本地开发如需调用 Sandbox，可通过 Vercel CLI `vercel link` 和 `vercel env pull` 获取所需环境。
-
-安全边界：
-
-- `SUPABASE_SERVICE_ROLE_KEY` 只能在服务端使用，不得出现在客户端代码中。
-- `SUPABASE_SERVICE_ROLE_KEY` 不得传入 Sandbox。
-- 只有 `NEXT_PUBLIC_*` 变量允许出现在前端。
-- `OPENAI_API_KEY` 只能在服务端和 Sandbox 执行时使用。
-
-## 暂不实现
-
-- 不创建 Fastify API。
-- 不创建 Local Runner。
-- 不创建 `apps/runner`。
-- 不执行 Vercel Sandbox、Codex CLI、安装、构建或 preview。
-
-## Phase 4: Vercel Sandbox Runner
-
-批准计划后，工作台会显示“启动 Vercel Sandbox 构建”按钮。该按钮调用服务端 API，在 Vercel Sandbox 内完成 Harness 写入、Vite React TypeScript 初始化、Codex CLI 执行、`pnpm install`、`pnpm build`、一次自动修复、文件索引、dev server 启动和 preview URL 写入。
-
-Sandbox SDK 封装在 `packages/sandbox-runner`。前端组件不得直接调用 `@vercel/sandbox`；所有 Sandbox SDK 调用只能出现在 runner 包或服务端 Route Handler 中。
-
-服务端 API：
-
-- `POST /api/runs/[runId]/sandbox/start`
-- `GET /api/runs/[runId]/sandbox/status`
-- `POST /api/runs/[runId]/sandbox/stop`
-- `GET /api/runs/[runId]/events`
-- `GET /api/projects/[projectId]/files/content?path=src/App.tsx`
-
-Sandbox workflow 会把 `sandbox_name`、`sandbox_status`、stdout/stderr、build 状态、修复状态、文件索引和 preview URL 写入 Supabase，避免函数中断后完全丢失状态。`run_events.payload` 使用 JSON；为兼容旧 UI，当前也同步写入 `metadata`。
-
-关键环境变量：
+必须配置的环境变量：
 
 ```env
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
+
+OPENAI_API_KEY=
+OPENAI_BASE_URL=https://api.deepseek.com
+OPENAI_MODEL=deepseek-v4-pro
+DEEPSEEK_API_KEY=
+
 SANDBOX_RUNTIME=node24
 SANDBOX_TIMEOUT_MS=2700000
 SANDBOX_PUBLISH_PORT=5173
-CODEX_CLI_COMMAND=codex
-CODEX_CLI_INSTALL_COMMAND=
-CODEX_API_KEY=
-OPENAI_API_KEY=
+
+OPENCODE_CLI_COMMAND=opencode
+OPENCODE_CLI_INSTALL_COMMAND=npm install -g opencode-ai
+OPENCODE_MODEL=deepseek/deepseek-v4-pro
+
+VERCEL_OIDC_TOKEN=
 VERCEL_SANDBOX_API_TOKEN=
 VERCEL_TOKEN=
 VERCEL_TEAM_ID=
 VERCEL_PROJECT_ID=
 ```
 
-`SUPABASE_SERVICE_ROLE_KEY` 只允许服务端使用，绝不会注入 Sandbox。Sandbox 内只注入 Codex 所需的最小环境变量白名单。
+`NEXT_PUBLIC_*` 会暴露给浏览器。`SUPABASE_SERVICE_ROLE_KEY`、模型密钥和 Vercel token 只能配置为服务端环境变量。
 
-`sandbox/start` 使用 Node.js runtime，并设置 `maxDuration = 300`。Vercel Sandbox 自身最长运行时间取决于 Vercel 计划：Hobby 通常最多 45 分钟，Pro/Enterprise 最多 5 小时。如果当前计划不支持长时间函数，建议把 `/sandbox/start` 降级为只创建 Sandbox 和写入初始状态，再由 Vercel Workflow、队列任务或用户手动重试 API 继续执行后续步骤。
+SMOTA 内置 LLM 默认使用 DeepSeek v4 Pro。DeepSeek API 兼容 OpenAI Chat Completions，因此这里复用 `OPENAI_API_KEY`、`OPENAI_BASE_URL` 和 `OPENAI_MODEL` 变量。`OPENAI_API_KEY` 可以直接填写 DeepSeek API key；也可以使用 `DEEPSEEK_API_KEY`。远程 Sandbox 会为 OpenCode 同时注入 `DEEPSEEK_API_KEY` 和 OpenAI-compatible 变量。
 
-MVP 阶段使用 Vercel Sandbox 隔离 AI 生成代码，但仍需关注网络外联、密钥注入和成本控制。后续可以增加 network policy，仅允许访问 npm registry、模型 API 和必要域名。
+## Vercel Sandbox
 
-## Phase 4 暂不实现
+MVP 不需要 Local Runner。所有 AI 生成代码、依赖安装、构建和 dev server 都运行在 Vercel Sandbox 内，Web Console 只负责创建和控制 Sandbox，并把状态写入 Supabase。
 
-- 不实现 Local Runner。
-- 不依赖本地 `generated-workspaces`。
-- 不创建 `apps/runner`。
-- 不把生成应用发布到生产环境。
+工作流：
+
+1. 用户批准计划。
+2. `POST /api/runs/[runId]/sandbox/start` 创建 Vercel Sandbox。
+3. 服务端写入 Harness 文件到 `/workspace`。
+4. Sandbox 初始化 Vite React TypeScript 应用。
+5. Sandbox 执行 OpenCode CLI。
+6. Sandbox 执行 `pnpm install` 和 `pnpm build`。
+7. 构建失败时只执行一次 OpenCode 自动修复。
+8. 扫描 `/workspace` 文件树，写入 `workspace_files`。
+9. 启动 `pnpm dev --host 0.0.0.0 --port 5173`。
+10. 保存 `agent_runs.sandbox_preview_url`，工作台 Preview Tab 用 iframe 展示。
+
+前端不能直接调用 `@vercel/sandbox`。文件内容通过服务端 API 读取：
+
+```text
+GET /api/projects/[projectId]/files/content?path=src/App.tsx
+```
+
+## OpenCode CLI
+
+默认命令是：
+
+```env
+OPENCODE_CLI_COMMAND=opencode
+OPENCODE_MODEL=deepseek/deepseek-v4-pro
+```
+
+Sandbox 内的 CodingAgent 使用 OpenCode 非交互模式：
+
+```bash
+opencode run --model deepseek/deepseek-v4-pro --agent build --dangerously-skip-permissions "<prompt>"
+```
+
+Sandbox 内的 OpenCode CLI 默认使用 DeepSeek v4 Pro：
+
+```env
+OPENAI_BASE_URL=https://api.deepseek.com
+OPENAI_MODEL=deepseek-v4-pro
+OPENAI_API_KEY=<DeepSeek API key>
+DEEPSEEK_API_KEY=<DeepSeek API key>
+```
+
+如果 Sandbox 镜像里没有 OpenCode CLI，配置安装命令：
+
+```env
+OPENCODE_CLI_INSTALL_COMMAND=npm install -g opencode-ai
+```
+
+如果启动后 Terminal Tab 显示 `OpenCode CLI not found in Vercel Sandbox`：
+
+1. 确认 `OPENCODE_CLI_COMMAND` 与实际二进制名称一致。
+2. 确认 `OPENCODE_CLI_INSTALL_COMMAND` 可以在 node24 Sandbox 中非交互执行。
+3. 确认模型 API key 已配置为 `DEEPSEEK_API_KEY` 或 `OPENAI_API_KEY`。
+4. 查看 Terminal Tab 的 `install_opencode_cli` 和 `check_opencode_cli` 输出。
+5. 如果模型不可用，运行 `opencode models deepseek --refresh` 检查 provider/model 名称。
+
+`SUPABASE_SERVICE_ROLE_KEY` 永远不会注入 Sandbox。Sandbox 环境变量只允许 OpenCode 运行所需的最小白名单。
+
+## Agent LLM 接口
+
+后续 ProductAgent、ArchitectAgent、PlannerAgent、CodingAgent、BuildAgent 和 ReviewerAgent 接入真实 LLM 时，统一从 `packages/agent-core/src/llm.ts` 获取 LangChain 模型：
+
+```ts
+import { createAgentChatModel } from "@smota/agent-core";
+
+const model = createAgentChatModel();
+```
+
+该工厂返回 `@langchain/openai` 的 `ChatOpenAI` 实例，默认配置为：
+
+- provider：`deepseek`
+- model：`deepseek-v4-pro`
+- base URL：`https://api.deepseek.com`
+- temperature：`0.2`
+
+如需切到网关或其他 DeepSeek 兼容端点，只覆盖 `OPENAI_BASE_URL` 和 `OPENAI_MODEL`。不要在 Agent 代码里直接读取或传播 `SUPABASE_SERVICE_ROLE_KEY`。
+
+## 工作台
+
+`/projects/[id]` 包含：
+
+- 左侧 Agent Panel：项目名、原始需求、run 状态、Sandbox 状态、Agent timeline、task checklist、批准计划、启动 Sandbox、停止 Sandbox、刷新状态。
+- Terminal Tab：轮询 `run_events`，展示 Agent 状态、Sandbox 创建状态、OpenCode 输出、`pnpm install`、`pnpm build`、自动修复、preview ready。stdout 和 stderr 使用不同轻量样式。
+- Files Tab：读取 `workspace_files`，展示 path、file_type、change_type、size、last_modified_at。点击文件进入 Editor Tab。
+- Editor Tab：使用 Monaco Editor 只读展示 Sandbox 文件内容。
+- Preview Tab：读取 `agent_runs.sandbox_preview_url`，有 URL 时 iframe 展示，无 URL 时提示等待 Sandbox 启动应用预览。
+- Plan Tab：使用 `react-markdown` 展示五个 Harness Artifact 和 Review Report。
+
+Editor Tab 会显示以下固定错误：
+
+- `Sandbox not ready`
+- `Sandbox stopped`
+- `File too large`
+- `Binary file is not supported`
+- `Invalid file path`
+
+## 成本、超时和安全风险
+
+Vercel Sandbox 会产生运行成本。OpenCode 执行、依赖安装、构建和 dev server 都会消耗时间，`SANDBOX_TIMEOUT_MS=2700000` 表示 45 分钟。不同 Vercel 计划的函数时长、Sandbox 时长和并发限制不同，端到端生成可能因为超时中断。
+
+MVP 当前不做 Local Runner，也不把生成应用发布到生产环境。这样可以把不可信代码限制在 Vercel Sandbox 内，但仍需注意：
+
+- Sandbox 可能访问外部网络，后续应增加 network policy。
+- OpenCode、DeepSeek API 调用和 npm install 会产生模型和网络成本。
+- 预览服务可能因 Sandbox 停止或过期不可用。
+- Service role key 会绕过 RLS，绝不能暴露给前端，也不能传入 Sandbox。
+
+## 验收路径
+
+1. 访问 Vercel 部署域名。
+2. 注册并登录。
+3. 在 Dashboard 创建项目。
+4. 打开项目页，确认五个 Harness Artifact 已生成。
+5. 批准计划。
+6. 启动 Vercel Sandbox 构建。
+7. 在 Terminal Tab 查看 Sandbox 日志。
+8. 在 Files Tab 查看生成文件。
+9. 点击文件，在 Editor Tab 读取只读内容。
+10. 在 Preview Tab 查看 Sandbox dev server URL。

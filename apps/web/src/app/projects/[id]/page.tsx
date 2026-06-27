@@ -6,9 +6,9 @@ export default async function ProjectPage({
   searchParams
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ tab?: string }>;
+  searchParams: Promise<{ tab?: string; file?: string }>;
 }) {
   const [{ id }, query] = await Promise.all([params, searchParams]);
   const data = await getProjectWorkspace(id);
-  return <Workbench {...data} activeTab={query.tab ?? "plan"} />;
+  return <Workbench {...data} activeTab={query.tab ?? "plan"} filePath={query.file} />;
 }

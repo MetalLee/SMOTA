@@ -95,7 +95,7 @@ export function createArchitecture(input: ProjectCreationInput): HarnessArtifact
 
 ## Sandbox 执行策略
 
-生成和构建只在 Vercel Sandbox 的 /workspace 内执行。Harness 文件作为 Codex CLI 的本地上下文，构建日志由平台持久化。
+生成和构建只在 Vercel Sandbox 的 /workspace 内执行。Harness 文件作为 OpenCode CLI 的本地上下文，构建日志由平台持久化。
 `
   };
 }

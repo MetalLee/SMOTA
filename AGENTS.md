@@ -16,7 +16,7 @@
 
 ### CodingAgent
 
-通过 Vercel Sandbox 调用 Codex CLI 执行代码修改。它在 `/workspace` 内工作，并使用 Harness 文件作为本地项目上下文。
+通过 Vercel Sandbox 调用 OpenCode CLI 执行代码修改。它在 `/workspace` 内工作，并使用 Harness 文件作为本地项目上下文。
 
 ### BuildAgent
 
@@ -41,7 +41,7 @@
 6. 平台创建 Vercel Sandbox。
 7. 平台将 Harness 文件写入 Sandbox `/workspace`。
 8. 平台在 Sandbox 内初始化 Vite React TypeScript 应用。
-9. CodingAgent 在 Sandbox 内执行 Codex CLI。
+9. CodingAgent 在 Sandbox 内执行 OpenCode CLI。
 10. BuildAgent 在 Sandbox 内执行 `pnpm install`。
 11. BuildAgent 在 Sandbox 内执行 `pnpm build`。
 12. 如果构建失败，BuildAgent 触发一次自动修复。

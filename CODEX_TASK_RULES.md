@@ -1,10 +1,10 @@
 # CODEX 任务规则
 
-这些规则适用于本仓库后续所有 Codex 开发工作。
+这些规则适用于本仓库后续所有 SMOTA 开发工作。
 
 ## 每次开发前必须阅读
 
-开始修改前，Codex 必须阅读：
+开始修改前，CodingAgent 必须阅读：
 
 - `PROJECT_BRIEF.md`
 - `ARCHITECTURE.md`
@@ -26,7 +26,7 @@
 - 不要把 `SUPABASE_SERVICE_ROLE_KEY` 暴露到前端。
 - 不要把 `SUPABASE_SERVICE_ROLE_KEY` 注入 Sandbox。
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY` 才是可以暴露给前端的 Supabase key。
-- Codex CLI 所需 API key 只能在 Sandbox 执行时注入。
+- OpenCode CLI 所需 API key 只能在 Sandbox 执行时注入。
 - 不要把用户私密数据直接写入 Sandbox。
 - 所有业务表必须包含 `owner_id`。
 - 所有业务表必须启用 RLS。

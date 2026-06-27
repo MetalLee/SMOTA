@@ -22,7 +22,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ proj
   try {
     safePath = sanitizeWorkspacePath(requestedPath);
   } catch {
-    return NextResponse.json({ error: "Invalid path. Parent traversal is not allowed." }, { status: 400 });
+    return fileError("invalid_file_path", "Invalid file path", 400);
   }
 
   const { data: project } = await supabase.from("projects").select("id").eq("id", projectId).eq("owner_id", user.id).single();
@@ -39,7 +39,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ proj
     .maybeSingle();
 
   if (!file) {
-    return NextResponse.json({ error: "File is not indexed for this project." }, { status: 404 });
+    return fileError("invalid_file_path", "Invalid file path", 404);
   }
 
   const { data: run } = await supabase
@@ -53,7 +53,11 @@ export async function GET(request: Request, { params }: { params: Promise<{ proj
     .maybeSingle();
 
   if (!run?.sandbox_name) {
-    return NextResponse.json({ error: "No Sandbox is associated with this project. Re-run the Sandbox workflow to read files." }, { status: 409 });
+    return fileError("sandbox_not_ready", "Sandbox not ready", 409);
+  }
+
+  if (run.sandbox_status === "stopped") {
+    return fileError("sandbox_stopped", "Sandbox stopped", 409);
   }
 
   try {
@@ -62,6 +66,19 @@ export async function GET(request: Request, { params }: { params: Promise<{ proj
     return NextResponse.json(content);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to restore Sandbox or read this file.";
-    return NextResponse.json({ error: message, hint: "If the Sandbox expired and cannot be restored, start a new Sandbox run." }, { status: 409 });
+    if (message.toLowerCase().includes("large") || message.toLowerCase().includes("limit")) {
+      return fileError("file_too_large", "File too large", 413);
+    }
+    if (message.toLowerCase().includes("binary")) {
+      return fileError("binary_file", "Binary file is not supported", 415);
+    }
+    if (message.toLowerCase().includes("stopped") || message.toLowerCase().includes("expired")) {
+      return fileError("sandbox_stopped", "Sandbox stopped", 409);
+    }
+    return fileError("sandbox_not_ready", "Sandbox not ready", 409, message);
   }
+}
+
+function fileError(code: string, error: string, status: number, detail?: string) {
+  return NextResponse.json({ code, error, detail }, { status });
 }

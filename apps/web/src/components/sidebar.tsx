@@ -1,17 +1,14 @@
-import { Box, Home, Layers, LogOut, Settings, Sparkles, UserRound } from "lucide-react";
+import Link from "next/link";
+import { LogOut, UserRound } from "lucide-react";
 import { signOutAction } from "@/app/actions/auth";
+import { getSidebarNavItems, getSidebarRecentProjects, type SidebarRecentProjectInput } from "@/lib/sidebar";
 
-const navItems = [
-  { label: "首页", icon: Home },
-  { label: "资源", icon: Box },
-  { label: "我的项目", icon: Layers },
-  { label: "模板", icon: Sparkles },
-  { label: "设置", icon: Settings }
-];
+export function Sidebar({ email, projects = [] }: { email?: string | null; projects?: SidebarRecentProjectInput[] }) {
+  const navItems = getSidebarNavItems();
+  const recentProjects = getSidebarRecentProjects(projects);
 
-export function Sidebar({ email }: { email?: string | null }) {
   return (
-    <aside className="flex h-screen w-64 shrink-0 flex-col border-r border-border bg-white px-4 py-5">
+    <aside className="flex h-screen w-64 shrink-0 flex-col overflow-y-auto border-r border-border bg-white px-4 py-5">
       <div className="mb-8 flex items-center gap-3 px-2">
         <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary text-sm font-bold text-white">
           S
@@ -33,6 +30,25 @@ export function Sidebar({ email }: { email?: string | null }) {
           </div>
         ))}
       </nav>
+
+      <section className="mt-8">
+        <div className="mb-3 px-3 text-xs font-semibold text-slate-400">最近</div>
+        {recentProjects.length ? (
+          <div className="space-y-1">
+            {recentProjects.map((project) => (
+              <Link
+                key={project.id}
+                href={project.href}
+                className="block truncate rounded-lg px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 hover:text-ink"
+              >
+                {project.name}
+              </Link>
+            ))}
+          </div>
+        ) : (
+          <div className="px-3 text-sm leading-6 text-slate-400">暂无项目</div>
+        )}
+      </section>
 
       <div className="mt-auto rounded-lg border border-border bg-slate-50 p-3">
         <div className="mb-3 flex items-center gap-3">

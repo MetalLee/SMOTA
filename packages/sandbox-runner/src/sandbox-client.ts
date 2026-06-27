@@ -20,6 +20,10 @@ export function buildSandboxName(ids: { ownerId: string; projectId: string; runI
   return `smota-${ids.ownerId.slice(0, 8)}-${ids.projectId.slice(0, 8)}-${ids.runId.slice(0, 8)}`.toLowerCase();
 }
 
+export function getVercelSandboxToken(env: Record<string, string | undefined> = process.env): string | undefined {
+  return env.VERCEL_SANDBOX_API_TOKEN ?? env.VERCEL_OIDC_TOKEN ?? env.VERCEL_TOKEN;
+}
+
 export function createSupabaseServiceClient(env: Record<string, string | undefined> = process.env): SupabaseClient {
   const url = env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY;
@@ -47,7 +51,7 @@ export async function createVercelSandbox(params: {
     timeout: params.config.timeoutMs,
     ports: [params.config.publishPort],
     env: toSandboxEnvironment(params.env ?? process.env),
-    token: params.env?.VERCEL_SANDBOX_API_TOKEN ?? process.env.VERCEL_SANDBOX_API_TOKEN ?? process.env.VERCEL_TOKEN,
+    token: getVercelSandboxToken(params.env ?? process.env),
     teamId: params.env?.VERCEL_TEAM_ID ?? process.env.VERCEL_TEAM_ID,
     projectId: params.env?.VERCEL_PROJECT_ID ?? process.env.VERCEL_PROJECT_ID,
     persistent: true
@@ -57,7 +61,7 @@ export async function createVercelSandbox(params: {
 export async function getVercelSandbox(name: string) {
   return Sandbox.get({
     name,
-    token: process.env.VERCEL_SANDBOX_API_TOKEN ?? process.env.VERCEL_TOKEN,
+    token: getVercelSandboxToken(process.env),
     teamId: process.env.VERCEL_TEAM_ID,
     projectId: process.env.VERCEL_PROJECT_ID
   });

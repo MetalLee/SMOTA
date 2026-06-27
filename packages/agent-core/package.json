@@ -12,6 +12,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@langchain/core": "^1.2.1",
+    "@langchain/openai": "^1.5.3",
     "@smota/shared": "workspace:*"
   },
   "devDependencies": {
