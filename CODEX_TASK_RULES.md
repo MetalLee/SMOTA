@@ -53,6 +53,15 @@
   - 右侧主画布。
 - 项目工作台必须优先支持 Preview、Editor、Plan、Terminal 和 Files。
 - MVP 阶段避免加入复杂拖拽编辑器。
+- 所有会触发请求的按钮必须有防重复提交机制：
+  - 请求进行中按钮必须禁用。
+  - 按钮内必须显示 loading 动画。
+  - client-side fetch 按钮必须有同步 guard，防止瞬间多次点击。
+  - server action 表单提交按钮优先使用通用 pending button。
+- 所有可感知的路由跳转必须有 loading 反馈：
+  - 普通页面跳转使用全局毛玻璃蒙版 loading。
+  - 工作台内部 tabs 和文件打开只在右侧工作区显示毛玻璃蒙版 loading，不遮挡左侧 Agent Panel。
+  - 跳转到当前地址、修饰键打开新页面等行为不应触发蒙版。
 
 ## 代码质量规则
 
@@ -68,4 +77,3 @@
 - 每次有实质改动后，更新 README 或相关文档。
 - 当架构、范围、agents 或路线图变化时，保持 Harness 文件同步更新。
 - 不要让安全边界、环境变量或 runner 行为的变化处于未文档化状态。
-

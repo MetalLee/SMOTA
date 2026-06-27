@@ -3,6 +3,7 @@ import {
   getAgentDisplayStates,
   getEditorLanguage,
   getFileContentErrorLabel,
+  getLoadingOverlayClasses,
   getRunControls,
   getTaskDisplayStatus,
   getWorkbenchLayoutClasses
@@ -89,5 +90,16 @@ describe("workbench helpers", () => {
         eventAgentNames: ["ProductAgent", "ArchitectAgent", "PlannerAgent"]
       }).ReviewerAgent
     ).toBe("done");
+  });
+
+  it("uses glass loading overlays for global and workspace-scoped navigation", () => {
+    const classes = getLoadingOverlayClasses();
+
+    expect(classes.globalOverlay).toContain("fixed");
+    expect(classes.globalOverlay).toContain("backdrop-blur");
+    expect(classes.workspaceOverlay).toContain("absolute");
+    expect(classes.workspaceOverlay).toContain("inset-0");
+    expect(classes.workspaceOverlay).toContain("backdrop-blur");
+    expect(classes.panel).toContain("shadow");
   });
 });

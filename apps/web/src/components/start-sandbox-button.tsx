@@ -16,6 +16,7 @@ export function StartSandboxButton({ runId, enabled }: StartSandboxButtonProps) 
   const [error, setError] = useState<string | null>(null);
 
   async function startSandbox() {
+    if (pending) return;
     setPending(true);
     setError(null);
 

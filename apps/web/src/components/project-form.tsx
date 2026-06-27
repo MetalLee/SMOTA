@@ -1,6 +1,6 @@
 import { WandSparkles } from "lucide-react";
 import { createProjectAction } from "@/app/actions/projects";
-import { Button } from "@/components/ui/button";
+import { PendingButton } from "@/components/pending-button";
 import { Card } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/input";
 
@@ -45,10 +45,10 @@ export function ProjectForm() {
           </fieldset>
         </div>
 
-        <Button type="submit" className="h-12 px-5">
+        <PendingButton type="submit" className="h-12 px-5" pendingLabel="构建中">
           <WandSparkles className="h-4 w-4" />
           构建
-        </Button>
+        </PendingButton>
       </form>
 
       <div className="mt-6 border-t border-border pt-5">

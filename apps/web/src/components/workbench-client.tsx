@@ -1,7 +1,6 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
@@ -24,6 +23,8 @@ import {
   XCircle
 } from "lucide-react";
 import { approvePlanAction } from "@/app/actions/projects";
+import { PendingButton } from "@/components/pending-button";
+import { LoadingOverlay, WorkspaceLoadingLink } from "@/components/route-loading";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
@@ -32,6 +33,7 @@ import {
   getAgentDisplayStates,
   getEditorLanguage,
   getFileContentErrorLabel,
+  getLoadingOverlayClasses,
   getRunControls,
   getTaskDisplayStatus,
   getWorkbenchLayoutClasses,
@@ -91,6 +93,8 @@ export function WorkbenchClient({
   const [sandboxRun, setSandboxRun] = useState<SandboxRunSnapshot | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [loadingAction, setLoadingAction] = useState<"start" | "stop" | null>(null);
+  const [previewRefreshing, setPreviewRefreshing] = useState(false);
+  const [workspaceNavigating, setWorkspaceNavigating] = useState(false);
   const [, startRefreshTransition] = useTransition();
 
   const queryTab = searchParams.get("tab") ?? initialActiveTab;
@@ -98,6 +102,7 @@ export function WorkbenchClient({
   const selectedFilePath = searchParams.get("file") ?? initialFilePath ?? files[0]?.path ?? "";
   const controls = getRunControls(run.status, run.sandbox_status);
   const layoutClasses = getWorkbenchLayoutClasses();
+  const overlayClasses = getLoadingOverlayClasses();
 
   const refreshWorkspace = useCallback(async () => {
     const [workspaceResponse, eventsResponse] = await Promise.all([
@@ -136,6 +141,7 @@ export function WorkbenchClient({
   }, [refreshWorkspace]);
 
   async function startSandbox() {
+    if (loadingAction !== null) return;
     setLoadingAction("start");
     setActionError(null);
     const response = await fetch(`/api/runs/${run.id}/sandbox/start`, { method: "POST" });
@@ -148,6 +154,7 @@ export function WorkbenchClient({
   }
 
   async function stopSandbox() {
+    if (loadingAction !== null) return;
     setLoadingAction("stop");
     setActionError(null);
     const response = await fetch(`/api/runs/${run.id}/sandbox/stop`, { method: "POST" });
@@ -159,12 +166,19 @@ export function WorkbenchClient({
     await refreshWorkspace();
   }
 
-  function refreshAll() {
+  async function refreshAll() {
+    if (previewRefreshing) return;
+    setPreviewRefreshing(true);
     startRefreshTransition(() => {
       router.refresh();
-      void refreshWorkspace();
     });
+    await refreshWorkspace();
+    setPreviewRefreshing(false);
   }
+
+  useEffect(() => {
+    setWorkspaceNavigating(false);
+  }, [activeTab, selectedFilePath]);
 
   return (
     <div className={layoutClasses.root}>
@@ -187,9 +201,10 @@ export function WorkbenchClient({
         <header className="flex h-16 items-center justify-between border-b border-border bg-white px-5">
           <nav className="flex items-center gap-1">
             {tabs.map(([key, label, Icon]) => (
-              <Link
+              <WorkspaceLoadingLink
                 key={key}
                 href={`/projects/${project.id}?tab=${key}${selectedFilePath && key === "editor" ? `&file=${encodeURIComponent(selectedFilePath)}` : ""}`}
+                onNavigateStart={() => setWorkspaceNavigating(true)}
                 className={cn(
                   "flex h-9 items-center gap-2 rounded-lg px-3 text-sm font-medium text-slate-500",
                   activeTab === key && "bg-slate-100 text-ink"
@@ -197,7 +212,7 @@ export function WorkbenchClient({
               >
                 <Icon className="h-4 w-4" />
                 {label}
-              </Link>
+              </WorkspaceLoadingLink>
             ))}
             <span className="ml-2 rounded-lg border border-border px-3 py-2 text-sm text-slate-400">跟随智能体</span>
           </nav>
@@ -214,12 +229,13 @@ export function WorkbenchClient({
           </div>
         </header>
 
-        <section className={layoutClasses.content}>
+        <section className={cn(layoutClasses.content, "relative")}>
           {activeTab === "plan" ? <PlanTab artifacts={artifacts} /> : null}
           {activeTab === "terminal" ? <TerminalTab events={events} run={run} sandboxRun={sandboxRun} /> : null}
-          {activeTab === "files" ? <FilesTab projectId={project.id} files={files} /> : null}
+          {activeTab === "files" ? <FilesTab projectId={project.id} files={files} onNavigateStart={() => setWorkspaceNavigating(true)} /> : null}
           {activeTab === "editor" ? <EditorTab projectId={project.id} filePath={selectedFilePath} /> : null}
-          {activeTab === "preview" ? <PreviewTab run={run} sandboxRun={sandboxRun} onRefresh={refreshAll} /> : null}
+          {activeTab === "preview" ? <PreviewTab run={run} sandboxRun={sandboxRun} onRefresh={refreshAll} refreshing={previewRefreshing} /> : null}
+          {workspaceNavigating ? <LoadingOverlay className={overlayClasses.workspaceOverlay} label="正在加载工作区" /> : null}
         </section>
       </main>
     </div>
@@ -344,9 +360,9 @@ function AgentPanel({
             <form action={approvePlanAction}>
               <input type="hidden" name="projectId" value={project.id} />
               <input type="hidden" name="runId" value={run.id} />
-              <Button type="submit" className="w-full">
+              <PendingButton type="submit" className="w-full" pendingLabel="批准中">
                 批准计划
-              </Button>
+              </PendingButton>
             </form>
           ) : null}
           {controls.primaryAction === "start" ? (
@@ -386,7 +402,7 @@ function StatusPill({ label, value }: { label: string; value: string }) {
   );
 }
 
-function PreviewTab({ run, sandboxRun, onRefresh }: { run: AgentRunRow; sandboxRun: SandboxRunSnapshot | null; onRefresh: () => void }) {
+function PreviewTab({ run, sandboxRun, onRefresh, refreshing }: { run: AgentRunRow; sandboxRun: SandboxRunSnapshot | null; onRefresh: () => Promise<void>; refreshing: boolean }) {
   const [failed, setFailed] = useState(false);
   const previewUrl = run.sandbox_preview_url ?? sandboxRun?.preview_url ?? null;
 
@@ -403,8 +419,16 @@ function PreviewTab({ run, sandboxRun, onRefresh }: { run: AgentRunRow; sandboxR
     <div className="mx-auto flex h-[calc(100vh-8rem)] max-w-6xl flex-col overflow-hidden rounded-lg border border-border bg-white">
       <div className="flex h-12 items-center justify-between border-b border-border px-4">
         <div className="text-sm font-semibold text-slate-700">Sandbox 状态：{run.sandbox_status ?? sandboxRun?.status ?? "unknown"}</div>
-        <Button type="button" onClick={() => { setFailed(false); onRefresh(); }} className="h-8 bg-white px-3 text-slate-700 hover:bg-slate-50">
-          <RefreshCw className="h-4 w-4" />
+        <Button
+          type="button"
+          disabled={refreshing}
+          onClick={() => {
+            setFailed(false);
+            void onRefresh();
+          }}
+          className="h-8 bg-white px-3 text-slate-700 hover:bg-slate-50"
+        >
+          {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
           刷新
         </Button>
       </div>
@@ -465,7 +489,7 @@ function TerminalLine({ event }: { event: RunEventRow }) {
   );
 }
 
-function FilesTab({ projectId, files }: { projectId: string; files: WorkspaceFileRow[] }) {
+function FilesTab({ projectId, files, onNavigateStart }: { projectId: string; files: WorkspaceFileRow[]; onNavigateStart: () => void }) {
   if (!files.length) {
     return <EmptyState title="等待 Vercel Sandbox 生成文件" body="Sandbox 构建阶段完成后，这里会展示扫描到的文件索引。" />;
   }
@@ -481,9 +505,10 @@ function FilesTab({ projectId, files }: { projectId: string; files: WorkspaceFil
       </div>
       <div className="divide-y divide-border">
         {files.map((file) => (
-          <Link
+          <WorkspaceLoadingLink
             key={file.id}
             href={`/projects/${projectId}?tab=editor&file=${encodeURIComponent(file.path)}`}
+            onNavigateStart={onNavigateStart}
             className="grid grid-cols-[minmax(220px,1fr)_120px_140px_110px_190px] px-5 py-3 text-sm hover:bg-slate-50"
           >
             <span className="truncate font-medium text-slate-800">{file.path}</span>
@@ -491,7 +516,7 @@ function FilesTab({ projectId, files }: { projectId: string; files: WorkspaceFil
             <span className="text-slate-500">{file.change_type ?? "generated"}</span>
             <span className="text-slate-500">{formatBytes(file.size)}</span>
             <span className="text-slate-500">{file.last_modified_at ? new Date(file.last_modified_at).toLocaleString() : "-"}</span>
-          </Link>
+          </WorkspaceLoadingLink>
         ))}
       </div>
     </Card>

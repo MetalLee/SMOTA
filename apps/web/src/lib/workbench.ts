@@ -17,6 +17,12 @@ export interface WorkbenchLayoutClasses {
   content: string;
 }
 
+export interface LoadingOverlayClasses {
+  globalOverlay: string;
+  workspaceOverlay: string;
+  panel: string;
+}
+
 export interface AgentDisplayStateInput {
   runStatus: string;
   currentStep: string | null;
@@ -66,6 +72,14 @@ export function getWorkbenchLayoutClasses(): WorkbenchLayoutClasses {
     agentPanelActions: "shrink-0 border-t border-border bg-white pt-4",
     main: "flex h-screen min-w-0 flex-1 flex-col overflow-hidden",
     content: "min-h-0 flex-1 overflow-y-auto p-6"
+  };
+}
+
+export function getLoadingOverlayClasses(): LoadingOverlayClasses {
+  return {
+    globalOverlay: "fixed inset-0 z-50 flex items-center justify-center bg-white/55 backdrop-blur-md",
+    workspaceOverlay: "absolute inset-0 z-30 flex items-center justify-center bg-white/55 backdrop-blur-md",
+    panel: "flex items-center gap-3 rounded-lg border border-border bg-white/85 px-4 py-3 text-sm font-semibold text-slate-700 shadow-soft"
   };
 }
 

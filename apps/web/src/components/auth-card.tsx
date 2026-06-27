@@ -1,5 +1,5 @@
-import Link from "next/link";
-import { Button } from "@/components/ui/button";
+import { PendingButton } from "@/components/pending-button";
+import { RouteLoadingLink } from "@/components/route-loading";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 
@@ -39,15 +39,15 @@ export function AuthCard({ mode, action, error, next }: AuthCardProps) {
             <label className="mb-2 block text-sm font-medium text-slate-700">密码</label>
             <Input name="password" type="password" required minLength={6} placeholder="至少 6 位" />
           </div>
-          <Button className="w-full" type="submit">
+          <PendingButton className="w-full" type="submit" pendingLabel={isLogin ? "登录中" : "注册中"}>
             {isLogin ? "登录" : "注册"}
-          </Button>
+          </PendingButton>
         </form>
         <p className="mt-6 text-center text-sm text-slate-500">
           {isLogin ? "还没有账号？" : "已经有账号？"}
-          <Link className="ml-1 font-semibold text-primary" href={isLogin ? "/auth/signup" : "/auth/login"}>
+          <RouteLoadingLink className="ml-1 font-semibold text-primary" href={isLogin ? "/auth/signup" : "/auth/login"}>
             {isLogin ? "去注册" : "去登录"}
-          </Link>
+          </RouteLoadingLink>
         </p>
       </Card>
     </main>
