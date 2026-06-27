@@ -1,5 +1,3 @@
-import { existsSync } from "node:fs";
-import { createRequire } from "node:module";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 export interface PreviewScreenshotConfig {
@@ -14,8 +12,6 @@ export interface PreviewScreenshotConfig {
 export interface CapturePreviewScreenshotInput {
   previewUrl: string;
   config: PreviewScreenshotConfig;
-  chromium?: RunnerChromium;
-  fileExists?: (path: string) => boolean;
 }
 
 export interface UploadPreviewScreenshotInput {
@@ -23,23 +19,6 @@ export interface UploadPreviewScreenshotInput {
   bucket: string;
   objectPath: string;
   image: Buffer;
-}
-
-export interface RunnerChromium {
-  executablePath(): string;
-  launch(options: { headless: boolean }): Promise<RunnerBrowser>;
-}
-
-export interface RunnerBrowser {
-  newPage(): Promise<RunnerPage>;
-  close(): Promise<void>;
-}
-
-export interface RunnerPage {
-  setViewportSize(viewport: { width: number; height: number }): Promise<void>;
-  goto(url: string, options: { timeout: number; waitUntil: "networkidle" }): Promise<unknown>;
-  waitForTimeout(timeout: number): Promise<void>;
-  screenshot(options: { type: "png" }): Promise<Buffer>;
 }
 
 export function getPreviewScreenshotBucket(env: Record<string, string | undefined> = process.env) {
@@ -65,57 +44,31 @@ export function buildPreviewScreenshotObjectPath(input: { ownerId: string; proje
   return `${input.ownerId}/${input.projectId}/${input.runId}/preview.png`;
 }
 
-export function getRunnerChromiumInstallCommand() {
-  return "pnpm --filter @smota/sandbox-runner install:chromium";
+export function getSandboxPreviewScreenshotPath() {
+  return "/tmp/smota-preview.png";
 }
 
-export function configureRunnerPlaywrightEnvironment(env: Record<string, string | undefined> = process.env) {
-  env.PLAYWRIGHT_BROWSERS_PATH ??= "0";
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-export function assertRunnerChromiumAvailable({
-  chromium,
-  fileExists = existsSync
-}: {
-  chromium: Pick<RunnerChromium, "executablePath">;
-  fileExists?: (path: string) => boolean;
-}) {
-  const executablePath = chromium.executablePath();
-  if (!executablePath || !fileExists(executablePath)) {
-    throw new Error(
-      `Runner Chromium is not installed${executablePath ? ` at ${executablePath}` : ""}. Run \`${getRunnerChromiumInstallCommand()}\` before starting the Runner.`
-    );
-  }
-}
-
-export async function loadRunnerChromium(): Promise<RunnerChromium> {
-  configureRunnerPlaywrightEnvironment();
-  const require = createRequire(import.meta.url);
-  const playwright = require("playwright") as { chromium: RunnerChromium };
-  return playwright.chromium;
-}
-
-export async function capturePreviewScreenshot({
+export function buildSandboxPreviewScreenshotCommand({
   previewUrl,
   config,
-  chromium,
-  fileExists = existsSync
-}: CapturePreviewScreenshotInput) {
-  const runnerChromium = chromium ?? (await loadRunnerChromium());
-  assertRunnerChromiumAvailable({ chromium: runnerChromium, fileExists });
-
-  const browser = await runnerChromium.launch({ headless: true });
-  try {
-    const page = await browser.newPage();
-    await page.setViewportSize(config.viewport);
-    await page.goto(previewUrl, { timeout: config.timeoutMs, waitUntil: "networkidle" });
-    if (config.settleMs > 0) {
-      await page.waitForTimeout(config.settleMs);
-    }
-    return await page.screenshot({ type: "png" });
-  } finally {
-    await browser.close();
-  }
+  outputPath = getSandboxPreviewScreenshotPath(),
+  playwrightVersion = "1.61.1"
+}: CapturePreviewScreenshotInput & { outputPath?: string; playwrightVersion?: string }) {
+  return [
+    `npm exec --yes playwright@${playwrightVersion} -- install chromium --only-shell`,
+    [
+      `npm exec --yes playwright@${playwrightVersion} -- screenshot`,
+      `--timeout ${config.timeoutMs}`,
+      `--wait-for-timeout ${Math.max(0, config.settleMs)}`,
+      `--viewport-size ${config.viewport.width},${config.viewport.height}`,
+      shellQuote(previewUrl),
+      shellQuote(outputPath)
+    ].join(" ")
+  ].join(" && ");
 }
 
 export async function uploadPreviewScreenshot({ supabase, bucket, objectPath, image }: UploadPreviewScreenshotInput) {

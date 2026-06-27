@@ -233,8 +233,8 @@ Sandbox 负责：
 - Vite 使用 `pnpm dev --config smota.vite.config.ts --host 0.0.0.0 --port 5173 --strictPort` 运行。
 - Runner 在启动 preview 前写入 `smota.vite.config.ts`，merge 生成应用的 `vite.config.ts` 并设置 `server.allowedHosts: true`，允许 Vercel Sandbox 动态预览域名访问 dev server。
 - 发布后的 preview URL 保存到 `sandbox_runs.preview_url` 和 `agent_runs.sandbox_preview_url`。
-- ReviewAgent 在 preview ready 后于 Runner 上校验 Playwright Chromium，使用 Playwright Chromium 对 Sandbox preview URL 截图，将 PNG 上传到 Supabase Storage bucket，并将公开图片 URL 保存到 `sandbox_runs.preview_image_url`。
-- Runner 构建/安装阶段通过 `pnpm --filter @smota/sandbox-runner install:chromium` 自动安装 Chromium，并默认使用 `PLAYWRIGHT_BROWSERS_PATH=0` 将浏览器二进制放入项目依赖目录，便于 Vercel 函数输出追踪打包。
+- ReviewAgent 只在生成应用 `pnpm build` 成功且 dev server 已启动后截图，不能对 `init_vite` 后的默认 Vite Home 截图。
+- 截图命令在 Vercel Sandbox 内执行，使用 `playwright install chromium --only-shell` 安装 headless shell 后将 PNG 写入临时路径；Web Function 只通过 Sandbox SDK 读取 PNG bytes，并用 service role 上传到 Supabase Storage，公开图片 URL 保存到 `sandbox_runs.preview_image_url`。
 - Web Console 在 iframe 中嵌入 preview URL。
 
 ## Vercel 环境变量

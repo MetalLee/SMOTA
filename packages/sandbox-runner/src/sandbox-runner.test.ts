@@ -159,7 +159,8 @@ describe("sandbox runner helpers", () => {
   it("plans realtime file scans around early preview startup", () => {
     expect(buildRealtimeSandboxPhasePlan()).toEqual({
       fileScanPhases: ["harness_written", "init_vite", "preview_ready", "opencode_run", "install_after_opencode", "build"],
-      previewStartsBeforeOpenCode: true
+      previewStartsBeforeOpenCode: true,
+      screenshotPhase: "after_build"
     });
   });
 

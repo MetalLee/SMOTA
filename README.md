@@ -100,17 +100,7 @@ VERCEL_TEAM_ID=
 VERCEL_PROJECT_ID=
 ```
 
-`NEXT_PUBLIC_*` 会暴露给浏览器。`SUPABASE_SERVICE_ROLE_KEY`、模型密钥和 Vercel token 只能配置为服务端环境变量。`SUPABASE_PREVIEW_BUCKET` 是 Supabase Storage bucket 名称，bucket 需要公开访问。ReviewAgent 会在 Runner 上使用 Playwright Chromium 截图，Runner 上传 `image/png` 并将公开 URL 写入 `sandbox_runs.preview_image_url`。
-
-Runner 环境必须安装 Playwright Chromium：
-
-```bash
-pnpm --filter @smota/sandbox-runner install:chromium
-```
-
-仓库根 `postinstall` 会自动执行该安装步骤。该脚本默认设置 `PLAYWRIGHT_BROWSERS_PATH=0`，把 Chromium 安装到项目依赖目录中，便于 Vercel 函数输出追踪将浏览器二进制一起打包；如果部署环境禁用了 lifecycle scripts，需要在安装后手动运行上面的命令。
-
-Vercel Web Console 的服务端函数也必须能解析 `playwright` 包。`@smota/web` 直接声明 `playwright` 依赖，并在 Next.js 服务端构建中将 `playwright` / `playwright-core` 外部化，避免 webpack 内联 Playwright 内部 bundle，同时保证截图运行时可以从部署包加载该依赖。
+`NEXT_PUBLIC_*` 会暴露给浏览器。`SUPABASE_SERVICE_ROLE_KEY`、模型密钥和 Vercel token 只能配置为服务端环境变量。`SUPABASE_PREVIEW_BUCKET` 是 Supabase Storage bucket 名称，bucket 需要公开访问。ReviewAgent 会在 Vercel Sandbox 内使用 Playwright Chromium headless shell 对构建完成后的 preview URL 截图；Web Function 只读取 Sandbox 里的 PNG bytes，上传 `image/png` 并将公开 URL 写入 `sandbox_runs.preview_image_url`。
 
 SMOTA 内置 LLM 默认使用 DeepSeek v4 Pro。DeepSeek API 兼容 OpenAI Chat Completions，因此这里复用 `OPENAI_API_KEY`、`OPENAI_BASE_URL` 和 `OPENAI_MODEL` 变量。`OPENAI_API_KEY` 可以直接填写 DeepSeek API key；也可以使用 `DEEPSEEK_API_KEY`。远程 Sandbox 会为 OpenCode 同时注入 `DEEPSEEK_API_KEY` 和 OpenAI-compatible 变量。
 
@@ -133,10 +123,9 @@ MVP 不需要 Local Runner。所有 AI 生成代码、依赖安装、构建和 d
 11. Sandbox 执行 `pnpm build`。
 12. 构建失败时只执行一次 OpenCode 自动修复，修复后再次安装依赖和构建。
 13. Runner 在 Harness、Vite 初始化、preview ready、OpenCode、安装后和 build 后持续增量扫描 `/workspace` 文件树，写入 `workspace_files`。
-14. ReviewAgent 在 Runner 上校验 Playwright Chromium 是否存在。
-15. ReviewAgent 在 Runner 上使用 Playwright Chromium 对 Sandbox preview URL 截图。
-16. Runner 将 PNG 上传到 `SUPABASE_PREVIEW_BUCKET`，路径为 `{owner_id}/{project_id}/{run_id}/preview.png`。
-17. 保存公开图片 URL 到 `sandbox_runs.preview_image_url`，`/my-projects` 卡片可直接展示。
+14. ReviewAgent 在 build 成功后于 Sandbox 内通过 Playwright Chromium headless shell 对 Sandbox preview URL 截图，避免截到 `init_vite` 后的默认 Vite Home。
+15. Web Function 通过 Sandbox SDK 读取 PNG bytes，并上传到 `SUPABASE_PREVIEW_BUCKET`，路径为 `{owner_id}/{project_id}/{run_id}/preview.png`。
+16. Web Function 保存公开图片 URL 到 `sandbox_runs.preview_image_url`，`/my-projects` 卡片可直接展示。
 
 `smota.vite.config.ts` 会 merge 生成应用的 `vite.config.ts`，并为 Sandbox preview 设置 `server.allowedHosts: true`，以接受 Vercel Sandbox 动态预览域名的 Host header。
 
@@ -161,8 +150,7 @@ SUPABASE_PREVIEW_BUCKET=smota-previews
 ```
 
 3. 执行迁移到远程数据库，确保 `sandbox_runs.preview_image_url` 存在。
-4. 本地触发 Sandbox workflow 前，先运行 `pnpm --filter @smota/sandbox-runner install:chromium`，确保本地 Runner 有 Chromium。
-5. 本地触发 Sandbox workflow 时，ReviewAgent 在 Runner 上截图；Runner 使用 service role key 上传截图到 bucket，并通过 `getPublicUrl()` 生成图片 URL。
+4. 本地触发 Sandbox workflow 时，ReviewAgent 在 Sandbox 内截图；Web Function 使用 service role key 上传截图到 bucket，并通过 `getPublicUrl()` 生成图片 URL。
 
 本地 Supabase CLI：
 
@@ -250,7 +238,7 @@ const model = createAgentChatModel();
 
 左侧菜单根据当前 top-level route 高亮对应项，项目详情页仍通过“最近”项目入口进入。
 
-`/my-projects` 使用卡片形式展示项目。卡片包含预览图、项目名、更新日期和三个点菜单；菜单仅包含“在浏览器打开”、“复制链接”、“删除”。删除需要弹窗确认。项目截图 URL 保存到 `sandbox_runs.preview_image_url`，Sandbox 构建完成并启动 preview 后会由 Runner 使用 Playwright Chromium 截图并写入该字段；字段为空时显示浅灰占位预览。
+`/my-projects` 使用卡片形式展示项目。卡片包含预览图、项目名、更新日期和三个点菜单；菜单仅包含“在浏览器打开”、“复制链接”、“删除”。删除需要弹窗确认。项目截图 URL 保存到 `sandbox_runs.preview_image_url`，Sandbox 构建完成并启动 preview 后会在 Sandbox 内使用 Playwright Chromium 截图，Web Function 读取 PNG 并写入该字段；字段为空时显示浅灰占位预览。
 
 `/projects/[id]` 包含：
 

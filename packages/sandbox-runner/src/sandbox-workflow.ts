@@ -6,7 +6,8 @@ import { insertRunEvent, updateRunStatus, type RunContext } from "./sandbox-even
 import { getSandboxPreviewUrl } from "./sandbox-preview";
 import {
   buildPreviewScreenshotObjectPath,
-  capturePreviewScreenshot,
+  buildSandboxPreviewScreenshotCommand,
+  getSandboxPreviewScreenshotPath,
   getPreviewScreenshotBucket,
   getPreviewScreenshotConfig,
   shouldCapturePreviewScreenshot,
@@ -119,7 +120,8 @@ export function buildViteDevServerArgs(port: number): string[] {
 export function buildRealtimeSandboxPhasePlan() {
   return {
     fileScanPhases: ["harness_written", "init_vite", "preview_ready", "opencode_run", "install_after_opencode", "build"],
-    previewStartsBeforeOpenCode: true
+    previewStartsBeforeOpenCode: true,
+    screenshotPhase: "after_build"
   };
 }
 
@@ -403,10 +405,25 @@ export async function runVercelSandboxWorkflow(runId: string, options: WorkflowO
     if (shouldCapturePreviewScreenshot({ bucket: screenshotBucket, previewUrl })) {
       try {
         await insertRunEvent(supabase, context, { eventType: "review.screenshot.started", step: "review_screenshot", message: "Capturing preview screenshot for project card." });
-        const screenshot = await capturePreviewScreenshot({
-          previewUrl,
-          config: getPreviewScreenshotConfig(env)
+        const screenshotConfig = getPreviewScreenshotConfig(env);
+        const screenshotPath = getSandboxPreviewScreenshotPath();
+        const screenshotCommand = await runSandboxCommand({
+          supabase,
+          context,
+          sandbox,
+          step: "review_screenshot",
+          cmd: "bash",
+          args: ["-lc", buildSandboxPreviewScreenshotCommand({ previewUrl, config: screenshotConfig, outputPath: screenshotPath })],
+          cwd: WORKSPACE_DIR,
+          timeoutMs: screenshotConfig.timeoutMs + screenshotConfig.settleMs + 5 * 60 * 1000
         });
+        if (screenshotCommand.exitCode !== 0) {
+          throw new Error(await commandOutput(screenshotCommand));
+        }
+        const screenshot = await sandbox.readFileToBuffer({ path: screenshotPath });
+        if (!screenshot) {
+          throw new Error(`Sandbox screenshot was not written to ${screenshotPath}.`);
+        }
         const objectPath = buildPreviewScreenshotObjectPath(context);
         previewImageUrl = await uploadPreviewScreenshot({
           supabase,
