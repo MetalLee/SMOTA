@@ -28,7 +28,7 @@ import {
 } from "lucide-react";
 import { approvePlanAction } from "@/app/actions/projects";
 import { PendingButton } from "@/components/pending-button";
-import { LoadingOverlay, WorkspaceLoadingLink } from "@/components/route-loading";
+import { LoadingOverlay, RouteLoadingLink, WorkspaceLoadingLink } from "@/components/route-loading";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
@@ -36,13 +36,16 @@ import {
   formatBytes,
   buildFileTree,
   getAgentDisplayStates,
+  getDashboardHref,
   getEditorLanguage,
   getExpandedDirectorySet,
   getFileContentErrorLabel,
   getLoadingOverlayClasses,
   getRunControls,
   getTaskDisplayStatus,
+  getWorkbenchHeaderActions,
   getWorkbenchLayoutClasses,
+  shouldShowWorkspaceNavigationOverlay,
   type AgentDisplayName,
   type FileTreeNode
 } from "@/lib/workbench";
@@ -110,6 +113,7 @@ export function WorkbenchClient({
   const controls = getRunControls(run.status, run.sandbox_status);
   const layoutClasses = getWorkbenchLayoutClasses();
   const overlayClasses = getLoadingOverlayClasses();
+  const headerActions = getWorkbenchHeaderActions();
 
   const refreshWorkspace = useCallback(async () => {
     const [workspaceResponse, eventsResponse] = await Promise.all([
@@ -207,32 +211,40 @@ export function WorkbenchClient({
       <main className={layoutClasses.main}>
         <header className="flex h-16 items-center justify-between border-b border-border bg-white px-5">
           <nav className="flex items-center gap-1">
-            {tabs.map(([key, label, Icon]) => (
-              <WorkspaceLoadingLink
-                key={key}
-                href={`/projects/${project.id}?tab=${key}${selectedFilePath && key === "editor" ? `&file=${encodeURIComponent(selectedFilePath)}` : ""}`}
-                onNavigateStart={() => setWorkspaceNavigating(true)}
-                className={cn(
-                  "flex h-9 items-center gap-2 rounded-lg px-3 text-sm font-medium text-slate-500",
-                  activeTab === key && "bg-slate-100 text-ink"
-                )}
-              >
-                <Icon className="h-4 w-4" />
-                {label}
-              </WorkspaceLoadingLink>
-            ))}
-            <span className="ml-2 rounded-lg border border-border px-3 py-2 text-sm text-slate-400">跟随智能体</span>
+            {tabs.map(([key, label, Icon]) => {
+              const nextFilePath = key === "editor" ? selectedFilePath : "";
+
+              return (
+                <WorkspaceLoadingLink
+                  key={key}
+                  href={`/projects/${project.id}?tab=${key}${nextFilePath ? `&file=${encodeURIComponent(nextFilePath)}` : ""}`}
+                  onNavigateStart={() => {
+                    if (shouldShowWorkspaceNavigationOverlay(activeTab, key, activeTab === "editor" ? selectedFilePath : "", nextFilePath)) {
+                      setWorkspaceNavigating(true);
+                    }
+                  }}
+                  className={cn(
+                    "flex h-9 items-center gap-2 rounded-lg px-3 text-sm font-medium text-slate-500",
+                    activeTab === key && "bg-slate-100 text-ink"
+                  )}
+                >
+                  <Icon className="h-4 w-4" />
+                  {label}
+                </WorkspaceLoadingLink>
+              );
+            })}
           </nav>
           <div className="flex items-center gap-2 text-slate-300">
-            <button disabled className="flex h-9 items-center gap-2 rounded-lg border border-border px-3 text-sm">
-              <Share2 className="h-4 w-4" />
-              分享
-            </button>
-            <button disabled className="flex h-9 items-center gap-2 rounded-lg border border-border px-3 text-sm">
-              <UploadCloud className="h-4 w-4" />
-              发布
-            </button>
-            <button disabled className="h-9 rounded-lg border border-border px-3 text-sm">控制台</button>
+            {headerActions.map((action) => {
+              const Icon = action.id === "share" ? Share2 : UploadCloud;
+
+              return (
+                <button key={action.id} disabled className="flex h-9 items-center gap-2 rounded-lg border border-border px-3 text-sm">
+                  <Icon className="h-4 w-4" />
+                  {action.label}
+                </button>
+              );
+            })}
           </div>
         </header>
 
@@ -240,7 +252,7 @@ export function WorkbenchClient({
           {activeTab === "plan" ? <PlanTab artifacts={artifacts} /> : null}
           {activeTab === "terminal" ? <TerminalTab events={events} run={run} sandboxRun={sandboxRun} /> : null}
           {activeTab === "files" ? <FilesTab projectId={project.id} files={files} onNavigateStart={() => setWorkspaceNavigating(true)} /> : null}
-          {activeTab === "editor" ? <EditorTab projectId={project.id} filePath={selectedFilePath} files={files} onNavigateStart={() => setWorkspaceNavigating(true)} /> : null}
+          {activeTab === "editor" ? <EditorTab projectId={project.id} filePath={selectedFilePath} files={files} /> : null}
           {activeTab === "preview" ? <PreviewTab run={run} sandboxRun={sandboxRun} onRefresh={refreshAll} refreshing={previewRefreshing} /> : null}
           {workspaceNavigating ? <LoadingOverlay className={overlayClasses.workspaceOverlay} label="正在加载工作区" /> : null}
         </section>
@@ -273,6 +285,7 @@ function AgentPanel({
   layoutClasses: ReturnType<typeof getWorkbenchLayoutClasses>;
 }) {
   const eventAgents = useMemo(() => new Set(events.map((event) => event.agent_name).filter((agentName): agentName is string => Boolean(agentName))), [events]);
+  const dashboardHref = getDashboardHref();
   const agentStates = useMemo(
     () =>
       getAgentDisplayStates({
@@ -289,10 +302,10 @@ function AgentPanel({
     <div className={layoutClasses.agentPanel}>
       <div className={layoutClasses.agentPanelSummary}>
         <div className="mb-6">
-          <div className="mb-3 flex items-center gap-2">
+          <RouteLoadingLink className="mb-3 flex w-fit items-center gap-2 rounded-lg pr-3 transition hover:bg-slate-50" href={dashboardHref}>
             <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary text-sm font-bold text-white">S</div>
             <div className="text-sm font-bold">SMOTA</div>
-          </div>
+          </RouteLoadingLink>
           <h1 className="text-xl font-bold">{project.name}</h1>
           <p className="mt-2 text-sm leading-6 text-slate-500">{project.prompt}</p>
         </div>
@@ -533,13 +546,11 @@ function FilesTab({ projectId, files, onNavigateStart }: { projectId: string; fi
 function EditorTab({
   projectId,
   filePath,
-  files,
-  onNavigateStart
+  files
 }: {
   projectId: string;
   filePath: string;
   files: WorkspaceFileRow[];
-  onNavigateStart: () => void;
 }) {
   const [content, setContent] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -603,7 +614,6 @@ function EditorTab({
               selectedPath={filePath}
               expandedDirs={expandedDirs}
               onToggleDirectory={toggleDirectory}
-              onNavigateStart={onNavigateStart}
             />
           ) : (
             <div className="px-3 py-4 text-sm leading-6 text-slate-400">等待 Vercel Sandbox 生成文件</div>
@@ -648,7 +658,6 @@ function FileTree({
   selectedPath,
   expandedDirs,
   onToggleDirectory,
-  onNavigateStart,
   depth = 0
 }: {
   nodes: FileTreeNode[];
@@ -656,7 +665,6 @@ function FileTree({
   selectedPath: string;
   expandedDirs: Set<string>;
   onToggleDirectory: (path: string) => void;
-  onNavigateStart: () => void;
   depth?: number;
 }) {
   return (
@@ -685,7 +693,6 @@ function FileTree({
                   selectedPath={selectedPath}
                   expandedDirs={expandedDirs}
                   onToggleDirectory={onToggleDirectory}
-                  onNavigateStart={onNavigateStart}
                   depth={depth + 1}
                 />
               ) : null}
@@ -697,7 +704,7 @@ function FileTree({
           <WorkspaceLoadingLink
             key={node.path}
             href={`/projects/${projectId}?tab=editor&file=${encodeURIComponent(node.path)}`}
-            onNavigateStart={onNavigateStart}
+            onNavigateStart={() => undefined}
             className={cn(
               "flex h-8 items-center gap-2 rounded-md pr-2 text-sm text-slate-600 transition hover:bg-white hover:text-ink",
               selectedPath === node.path && "bg-primary/10 font-semibold text-primary hover:bg-primary/10 hover:text-primary"

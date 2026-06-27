@@ -10,7 +10,7 @@ export function Sidebar({ email, projects = [] }: { email?: string | null; proje
 
   return (
     <aside className="flex h-screen w-64 shrink-0 flex-col overflow-y-auto border-r border-border bg-white px-4 py-5">
-      <div className="mb-8 flex items-center gap-3 px-2">
+      <RouteLoadingLink className="mb-8 flex items-center gap-3 rounded-lg px-2 py-1 transition hover:bg-slate-50" href="/dashboard">
         <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary text-sm font-bold text-white">
           S
         </div>
@@ -18,7 +18,7 @@ export function Sidebar({ email, projects = [] }: { email?: string | null; proje
           <div className="text-sm font-bold tracking-wide">SMOTA</div>
           <div className="text-xs text-slate-500">AI App Builder</div>
         </div>
-      </div>
+      </RouteLoadingLink>
 
       <nav className="space-y-1">
         {navItems.map((item) => (

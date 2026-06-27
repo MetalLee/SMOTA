@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
 import { RouteLoadingProvider } from "@/components/route-loading";
+import { getRouteLoadingSuspenseFallback } from "@/lib/route-loading";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -12,7 +13,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   return (
     <html lang="zh-CN">
       <body>
-        <Suspense fallback={children}>
+        <Suspense fallback={getRouteLoadingSuspenseFallback(children)}>
           <RouteLoadingProvider>{children}</RouteLoadingProvider>
         </Suspense>
       </body>

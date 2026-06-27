@@ -2,13 +2,16 @@ import { describe, expect, it } from "vitest";
 import {
   getAgentDisplayStates,
   buildFileTree,
+  getDashboardHref,
   getEditorLanguage,
   getExpandedDirectorySet,
+  getWorkbenchHeaderActions,
   getFileContentErrorLabel,
   getLoadingOverlayClasses,
   getRunControls,
   getTaskDisplayStatus,
-  getWorkbenchLayoutClasses
+  getWorkbenchLayoutClasses,
+  shouldShowWorkspaceNavigationOverlay
 } from "./workbench";
 
 describe("workbench helpers", () => {
@@ -103,6 +106,21 @@ describe("workbench helpers", () => {
     expect(classes.workspaceOverlay).toContain("inset-0");
     expect(classes.workspaceOverlay).toContain("backdrop-blur");
     expect(classes.panel).toContain("shadow");
+  });
+
+  it("does not show a workspace overlay when switching files inside the editor", () => {
+    expect(shouldShowWorkspaceNavigationOverlay("editor", "editor", "src/App.tsx", "src/main.tsx")).toBe(false);
+    expect(shouldShowWorkspaceNavigationOverlay("editor", "editor", "", "src/main.tsx")).toBe(false);
+    expect(shouldShowWorkspaceNavigationOverlay("editor", "preview", "src/App.tsx", "src/App.tsx")).toBe(true);
+    expect(shouldShowWorkspaceNavigationOverlay("preview", "editor", "", "src/App.tsx")).toBe(true);
+  });
+
+  it("keeps only active project detail header actions", () => {
+    expect(getWorkbenchHeaderActions().map((action) => action.label)).toEqual(["分享", "发布"]);
+  });
+
+  it("uses dashboard as the workbench brand destination", () => {
+    expect(getDashboardHref()).toBe("/dashboard");
   });
 
   it("builds a sorted nested file tree from workspace paths", () => {

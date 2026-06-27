@@ -23,6 +23,11 @@ export interface LoadingOverlayClasses {
   panel: string;
 }
 
+export interface WorkbenchHeaderAction {
+  id: "share" | "publish";
+  label: string;
+}
+
 export interface FileTreeNode {
   name: string;
   path: string;
@@ -45,6 +50,10 @@ const ERROR_LABELS: Record<string, string> = {
   binary_file: "Binary file is not supported",
   invalid_file_path: "Invalid file path"
 };
+
+export function getDashboardHref(): string {
+  return "/dashboard";
+}
 
 export function getRunControls(runStatus: string, sandboxStatus: string | null): { primaryAction: PrimaryRunAction; label: string } {
   if (runStatus === "draft" || runStatus === "pending_approval") {
@@ -88,6 +97,21 @@ export function getLoadingOverlayClasses(): LoadingOverlayClasses {
     workspaceOverlay: "absolute inset-0 z-30 flex items-center justify-center bg-white/55 backdrop-blur-md",
     panel: "flex items-center gap-3 rounded-lg border border-border bg-white/85 px-4 py-3 text-sm font-semibold text-slate-700 shadow-soft"
   };
+}
+
+export function shouldShowWorkspaceNavigationOverlay(currentTab: string, nextTab: string, currentFilePath: string, nextFilePath: string): boolean {
+  if (currentTab === "editor" && nextTab === "editor" && currentFilePath !== nextFilePath) {
+    return false;
+  }
+
+  return currentTab !== nextTab || currentFilePath !== nextFilePath;
+}
+
+export function getWorkbenchHeaderActions(): WorkbenchHeaderAction[] {
+  return [
+    { id: "share", label: "分享" },
+    { id: "publish", label: "发布" }
+  ];
 }
 
 function sortFileTreeNodes(nodes: FileTreeNode[]) {
