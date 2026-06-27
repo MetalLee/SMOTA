@@ -42,6 +42,7 @@ pnpm dev
 -- supabase/migrations/0001_init.sql
 -- supabase/migrations/0002_rls.sql
 -- supabase/migrations/0003_sandbox_runner.sql
+-- supabase/migrations/0004_preview_images.sql
 ```
 
 迁移会创建 `projects`、`agent_runs`、`tasks`、`artifacts`、`workspace_files`、`run_events`、`sandbox_runs` 等业务表。所有业务表都包含 `owner_id` 并启用 RLS，用户只能读取和修改自己的数据。
@@ -54,7 +55,7 @@ MVP 使用 Supabase 邮箱密码认证：
 2. 开发阶段可关闭 Confirm email，生产环境建议开启邮件确认并配置 SMTP。
 3. 在 URL Configuration 设置 Site URL 为 Vercel 生产域名，本地调试添加 `http://localhost:3000` 到 Redirect URLs。
 
-未登录用户访问 `/dashboard`、`/projects/*`、`/runs/*` 会跳转到 `/auth/login`。
+未登录用户访问 `/dashboard`、`/resource`、`/my-projects`、`/projects/*`、`/runs/*` 会跳转到 `/auth/login`。
 
 ## Vercel 部署
 
@@ -72,6 +73,7 @@ MVP 使用 Supabase 邮箱密码认证：
 NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
+SUPABASE_PREVIEW_BUCKET=
 
 OPENAI_API_KEY=
 OPENAI_BASE_URL=https://api.deepseek.com
@@ -81,6 +83,10 @@ DEEPSEEK_API_KEY=
 SANDBOX_RUNTIME=node24
 SANDBOX_TIMEOUT_MS=2700000
 SANDBOX_PUBLISH_PORT=5173
+PREVIEW_SCREENSHOT_WIDTH=1280
+PREVIEW_SCREENSHOT_HEIGHT=720
+PREVIEW_SCREENSHOT_TIMEOUT_MS=30000
+PREVIEW_SCREENSHOT_SETTLE_MS=1500
 
 OPENCODE_CLI_COMMAND=opencode
 OPENCODE_CLI_INSTALL_COMMAND=npm install -g opencode-ai
@@ -93,7 +99,15 @@ VERCEL_TEAM_ID=
 VERCEL_PROJECT_ID=
 ```
 
-`NEXT_PUBLIC_*` 会暴露给浏览器。`SUPABASE_SERVICE_ROLE_KEY`、模型密钥和 Vercel token 只能配置为服务端环境变量。
+`NEXT_PUBLIC_*` 会暴露给浏览器。`SUPABASE_SERVICE_ROLE_KEY`、模型密钥和 Vercel token 只能配置为服务端环境变量。`SUPABASE_PREVIEW_BUCKET` 是 Supabase Storage bucket 名称，bucket 需要公开访问。ReviewAgent 会在 Runner 上使用 Playwright Chromium 截图，Runner 上传 `image/png` 并将公开 URL 写入 `sandbox_runs.preview_image_url`。
+
+Runner 环境必须安装 Playwright Chromium：
+
+```bash
+pnpm --filter @smota/sandbox-runner exec playwright install chromium
+```
+
+仓库根 `postinstall` 会自动执行该安装步骤；如果部署环境禁用了 lifecycle scripts，需要在安装后手动运行上面的命令。
 
 SMOTA 内置 LLM 默认使用 DeepSeek v4 Pro。DeepSeek API 兼容 OpenAI Chat Completions，因此这里复用 `OPENAI_API_KEY`、`OPENAI_BASE_URL` 和 `OPENAI_MODEL` 变量。`OPENAI_API_KEY` 可以直接填写 DeepSeek API key；也可以使用 `DEEPSEEK_API_KEY`。远程 Sandbox 会为 OpenCode 同时注入 `DEEPSEEK_API_KEY` 和 OpenAI-compatible 变量。
 
@@ -112,7 +126,11 @@ MVP 不需要 Local Runner。所有 AI 生成代码、依赖安装、构建和 d
 7. 构建失败时只执行一次 OpenCode 自动修复。
 8. 扫描 `/workspace` 文件树，写入 `workspace_files`。
 9. 写入 `smota.vite.config.ts` preview overlay，并启动 `pnpm dev --config smota.vite.config.ts --host 0.0.0.0 --port 5173 --strictPort`。
-10. 保存 `agent_runs.sandbox_preview_url`，工作台 Preview Tab 用 iframe 展示。
+10. 保存 `agent_runs.sandbox_preview_url` 和 `sandbox_runs.preview_url`。
+11. ReviewAgent 在 Runner 上校验 Playwright Chromium 是否存在。
+12. ReviewAgent 在 Runner 上使用 Playwright Chromium 对 Sandbox preview URL 截图。
+13. Runner 将 PNG 上传到 `SUPABASE_PREVIEW_BUCKET`，路径为 `{owner_id}/{project_id}/{run_id}/preview.png`。
+14. 保存公开图片 URL 到 `sandbox_runs.preview_image_url`，`/my-projects` 卡片可直接展示。
 
 `smota.vite.config.ts` 会 merge 生成应用的 `vite.config.ts`，并为 Sandbox preview 设置 `server.allowedHosts: true`，以接受 Vercel Sandbox 动态预览域名的 Host header。
 
@@ -121,6 +139,41 @@ MVP 不需要 Local Runner。所有 AI 生成代码、依赖安装、构建和 d
 ```text
 GET /api/projects/[projectId]/files/content?path=src/App.tsx
 ```
+
+### 本地对接 Supabase Storage
+
+远程 Supabase：
+
+1. 在 Supabase Dashboard 创建公开 bucket，例如 `smota-previews`。
+2. 本地 `.env.local` 和 `apps/web/.env.local` 配置：
+
+```env
+NEXT_PUBLIC_SUPABASE_URL=https://<project-ref>.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon-key>
+SUPABASE_SERVICE_ROLE_KEY=<service-role-key>
+SUPABASE_PREVIEW_BUCKET=smota-previews
+```
+
+3. 执行迁移到远程数据库，确保 `sandbox_runs.preview_image_url` 存在。
+4. 本地触发 Sandbox workflow 前，先运行 `pnpm --filter @smota/sandbox-runner exec playwright install chromium`，确保本地 Runner 有 Chromium。
+5. 本地触发 Sandbox workflow 时，ReviewAgent 在 Runner 上截图；Runner 使用 service role key 上传截图到 bucket，并通过 `getPublicUrl()` 生成图片 URL。
+
+本地 Supabase CLI：
+
+1. 安装 Docker 和 Supabase CLI。
+2. 在项目根目录运行 `supabase init`（如果尚未初始化）和 `supabase start`。
+3. 使用 `supabase status` 查看本地 API URL、anon key、service role key 和 Studio URL。
+4. 在本地 Studio 的 Storage 中创建公开 bucket，或在 `supabase/config.toml` 中定义 bucket。
+5. 配置本地环境变量：
+
+```env
+NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321
+NEXT_PUBLIC_SUPABASE_ANON_KEY=<local-anon-key>
+SUPABASE_SERVICE_ROLE_KEY=<local-service-role-key>
+SUPABASE_PREVIEW_BUCKET=smota-previews
+```
+
+公开 bucket 的图片 URL 形式为 `/storage/v1/object/public/<bucket>/<path>`；SDK 会用 `getPublicUrl()` 生成完整 URL。
 
 ## OpenCode CLI
 
@@ -182,6 +235,16 @@ const model = createAgentChatModel();
 如需切到网关或其他 DeepSeek 兼容端点，只覆盖 `OPENAI_BASE_URL` 和 `OPENAI_MODEL`。不要在 Agent 代码里直接读取或传播 `SUPABASE_SERVICE_ROLE_KEY`。
 
 ## 工作台
+
+主导航路由关系：
+
+- `/dashboard`：首页。
+- `/resource`：资源。
+- `/my-projects`：我的项目。
+
+左侧菜单根据当前 top-level route 高亮对应项，项目详情页仍通过“最近”项目入口进入。
+
+`/my-projects` 使用卡片形式展示项目。卡片包含预览图、项目名、更新日期和三个点菜单；菜单仅包含“在浏览器打开”、“复制链接”、“删除”。删除需要弹窗确认。项目截图 URL 保存到 `sandbox_runs.preview_image_url`，Sandbox 构建完成并启动 preview 后会由 Runner 使用 Playwright Chromium 截图并写入该字段；字段为空时显示浅灰占位预览。
 
 `/projects/[id]` 包含：
 

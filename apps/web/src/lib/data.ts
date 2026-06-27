@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import type { AgentRunRow, ArtifactRow, ProjectRow, RunEventRow, TaskRow, WorkspaceFileRow } from "@smota/shared";
+import { toProjectCards, type SandboxRunPreviewRow } from "@/lib/my-projects";
 import { createClient } from "@/lib/supabase/server";
 
 export async function getCurrentUser() {
@@ -25,6 +26,40 @@ export async function getDashboardData() {
     .limit(8);
 
   return { user, projects: (projects ?? []) as ProjectRow[] };
+}
+
+export async function getMyProjectsData() {
+  const { supabase, user } = await getCurrentUser();
+  const { data: projects } = await supabase
+    .from("projects")
+    .select("*")
+    .eq("owner_id", user.id)
+    .order("updated_at", { ascending: false });
+
+  const projectRows = (projects ?? []) as ProjectRow[];
+  const projectIds = projectRows.map((project) => project.id);
+
+  const { data: runs } = projectIds.length
+    ? await supabase
+        .from("sandbox_runs")
+        .select("project_id,preview_url,preview_image_url,updated_at")
+        .eq("owner_id", user.id)
+        .in("project_id", projectIds)
+        .order("updated_at", { ascending: false })
+    : { data: [] };
+
+  const previewRows = (runs ?? []).map((run) => ({
+    project_id: String(run.project_id),
+    preview_url: typeof run.preview_url === "string" ? run.preview_url : null,
+    preview_image_url: typeof run.preview_image_url === "string" ? run.preview_image_url : null,
+    updated_at: String(run.updated_at)
+  })) satisfies SandboxRunPreviewRow[];
+
+  return {
+    user,
+    projects: projectRows,
+    projectCards: toProjectCards(projectRows, previewRows)
+  };
 }
 
 export async function getProjectWorkspace(projectId: string) {

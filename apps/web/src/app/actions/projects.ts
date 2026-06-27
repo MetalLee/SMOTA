@@ -148,3 +148,21 @@ export async function approvePlanAction(formData: FormData) {
 
   revalidatePath(`/projects/${projectId}`);
 }
+
+export async function deleteProjectAction(formData: FormData) {
+  const projectId = String(formData.get("projectId") ?? "");
+  const { supabase, user } = await requireUser();
+
+  if (!projectId) {
+    throw new Error("缺少项目 ID。");
+  }
+
+  const { error } = await supabase.from("projects").delete().eq("id", projectId).eq("owner_id", user.id);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  revalidatePath("/my-projects");
+  revalidatePath("/dashboard");
+}

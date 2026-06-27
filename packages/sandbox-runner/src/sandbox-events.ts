@@ -16,6 +16,9 @@ export type RunEventType =
   | "fix.started"
   | "fix.finished"
   | "preview.ready"
+  | "review.screenshot.started"
+  | "review.screenshot.saved"
+  | "review.screenshot.failed"
   | "run.failed";
 
 export interface RunContext {

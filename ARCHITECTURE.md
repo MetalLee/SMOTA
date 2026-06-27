@@ -233,6 +233,7 @@ Sandbox 负责：
 - Vite 使用 `pnpm dev --config smota.vite.config.ts --host 0.0.0.0 --port 5173 --strictPort` 运行。
 - Runner 在启动 preview 前写入 `smota.vite.config.ts`，merge 生成应用的 `vite.config.ts` 并设置 `server.allowedHosts: true`，允许 Vercel Sandbox 动态预览域名访问 dev server。
 - 发布后的 preview URL 保存到 `sandbox_runs.preview_url` 和 `agent_runs.sandbox_preview_url`。
+- ReviewAgent 在 preview ready 后于 Runner 上校验 Playwright Chromium，使用 Playwright Chromium 对 Sandbox preview URL 截图，将 PNG 上传到 Supabase Storage bucket，并将公开图片 URL 保存到 `sandbox_runs.preview_image_url`。
 - Web Console 在 iframe 中嵌入 preview URL。
 
 ## Vercel 环境变量
@@ -240,6 +241,7 @@ Sandbox 负责：
 - `NEXT_PUBLIC_SUPABASE_URL`
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
 - `SUPABASE_SERVICE_ROLE_KEY`
+- `SUPABASE_PREVIEW_BUCKET`
 - `DEEPSEEK_API_KEY`
 - `OPENAI_API_KEY`
 - `OPENAI_BASE_URL=https://api.deepseek.com`
@@ -247,6 +249,10 @@ Sandbox 负责：
 - `SANDBOX_RUNTIME=node24`
 - `SANDBOX_TIMEOUT_MS`
 - `SANDBOX_PUBLISH_PORT=5173`
+- `PREVIEW_SCREENSHOT_WIDTH=1280`
+- `PREVIEW_SCREENSHOT_HEIGHT=720`
+- `PREVIEW_SCREENSHOT_TIMEOUT_MS=30000`
+- `PREVIEW_SCREENSHOT_SETTLE_MS=1500`
 - `OPENCODE_CLI_COMMAND=opencode`
 - `OPENCODE_CLI_INSTALL_COMMAND=npm install -g opencode-ai`
 - `OPENCODE_MODEL=deepseek/deepseek-v4-pro`

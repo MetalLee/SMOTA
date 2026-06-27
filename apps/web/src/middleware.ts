@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
+import { isProtectedPath } from "@/lib/protected-routes";
 
 type CookieToSet = {
   name: string;
@@ -7,11 +8,9 @@ type CookieToSet = {
   options: CookieOptions;
 };
 
-const protectedPrefixes = ["/dashboard", "/projects", "/runs"];
-
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({ request });
-  const isProtected = protectedPrefixes.some((prefix) => request.nextUrl.pathname.startsWith(prefix));
+  const isProtected = isProtectedPath(request.nextUrl.pathname);
 
   if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
     if (isProtected) {

@@ -2,10 +2,10 @@ import { LogOut, UserRound } from "lucide-react";
 import { signOutAction } from "@/app/actions/auth";
 import { PendingButton } from "@/components/pending-button";
 import { RouteLoadingLink } from "@/components/route-loading";
-import { getSidebarNavItems, getSidebarRecentProjects, type SidebarRecentProjectInput } from "@/lib/sidebar";
+import { SidebarNav } from "@/components/sidebar-nav";
+import { getSidebarRecentProjects, type SidebarRecentProjectInput } from "@/lib/sidebar";
 
 export function Sidebar({ email, projects = [] }: { email?: string | null; projects?: SidebarRecentProjectInput[] }) {
-  const navItems = getSidebarNavItems();
   const recentProjects = getSidebarRecentProjects(projects);
 
   return (
@@ -20,17 +20,7 @@ export function Sidebar({ email, projects = [] }: { email?: string | null; proje
         </div>
       </RouteLoadingLink>
 
-      <nav className="space-y-1">
-        {navItems.map((item) => (
-          <div
-            key={item.label}
-            className="flex h-10 items-center gap-3 rounded-lg px-3 text-sm text-slate-600 transition hover:bg-slate-50 hover:text-ink"
-          >
-            <item.icon className="h-4 w-4" />
-            {item.label}
-          </div>
-        ))}
-      </nav>
+      <SidebarNav />
 
       <section className="mt-8">
         <div className="mb-3 px-3 text-xs font-semibold text-slate-400">最近</div>

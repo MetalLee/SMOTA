@@ -1,0 +1,141 @@
+import type { ProjectRow } from "@smota/shared";
+
+export interface SandboxRunPreviewRow {
+  project_id: string;
+  preview_url: string | null;
+  preview_image_url?: string | null;
+  updated_at: string;
+}
+
+export interface MyProjectCard {
+  id: string;
+  name: string;
+  href: string;
+  openUrl: string;
+  previewImageUrl: string | null;
+  updatedDate: string;
+  published: boolean;
+}
+
+export type ProjectCardMenuItem = {
+  label: "在浏览器打开" | "复制链接" | "删除";
+  action: "open" | "copy" | "delete";
+};
+
+export type ProjectCardMenuPlacement = "below" | "above";
+
+export function formatProjectCardDate(value: string) {
+  const date = new Date(value);
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+
+  return `${year}/${month}/${day}`;
+}
+
+export function groupLatestSandboxRunsByProject(runs: SandboxRunPreviewRow[]) {
+  const latestByProject = new Map<string, SandboxRunPreviewRow>();
+
+  for (const run of runs) {
+    const existing = latestByProject.get(run.project_id);
+    if (!existing || new Date(run.updated_at).getTime() > new Date(existing.updated_at).getTime()) {
+      latestByProject.set(run.project_id, run);
+    }
+  }
+
+  return [...latestByProject.values()];
+}
+
+export function toProjectCards(projects: ProjectRow[], runs: SandboxRunPreviewRow[] = []): MyProjectCard[] {
+  const latestRunByProject = new Map(groupLatestSandboxRunsByProject(runs).map((run) => [run.project_id, run]));
+
+  return projects.map((project) => {
+    const href = `/projects/${project.id}`;
+    const latestRun = latestRunByProject.get(project.id);
+    const previewUrl = latestRun?.preview_url?.trim() || "";
+
+    return {
+      id: project.id,
+      name: project.name?.trim() || "未命名项目",
+      href,
+      openUrl: previewUrl || href,
+      previewImageUrl: latestRun?.preview_image_url?.trim() || null,
+      updatedDate: formatProjectCardDate(project.updated_at),
+      published: Boolean(previewUrl)
+    };
+  });
+}
+
+export function getProjectCardMenuItems(): ProjectCardMenuItem[] {
+  return [
+    { label: "在浏览器打开", action: "open" },
+    { label: "复制链接", action: "copy" },
+    { label: "删除", action: "delete" }
+  ];
+}
+
+export function getMyProjectsGridClass() {
+  return "grid grid-cols-[repeat(auto-fit,minmax(18rem,1fr))] gap-6";
+}
+
+export function getProjectCardShellClass(menuOpen: boolean) {
+  return [
+    "relative overflow-visible rounded-lg border border-border bg-white shadow-sm transition hover:-translate-y-0.5 hover:shadow-soft",
+    menuOpen ? "z-30" : "z-0"
+  ].join(" ");
+}
+
+export function getProjectCardMenuClass(placement: ProjectCardMenuPlacement) {
+  return [
+    "absolute right-4 z-50 w-48 rounded-lg border border-border bg-white p-2 text-sm shadow-xl",
+    placement === "above" ? "bottom-16" : "top-16"
+  ].join(" ");
+}
+
+export function getPublishedBadgeClass() {
+  return "absolute -top-14 left-5 inline-flex items-center gap-1.5 rounded-full bg-primary/90 px-3 py-1.5 text-xs font-semibold text-white shadow-sm shadow-primary/20";
+}
+
+export function getPreviewPlaceholderClasses() {
+  return {
+    surface: "relative h-52 overflow-hidden rounded-t-lg border-b border-slate-200 bg-slate-100",
+    artwork:
+      "absolute inset-0 opacity-80 [background-image:linear-gradient(135deg,rgba(97,87,255,0.12)_0_1px,transparent_1px_42px),repeating-linear-gradient(0deg,transparent_0_27px,rgba(148,163,184,0.22)_28px_29px),repeating-linear-gradient(90deg,transparent_0_35px,rgba(148,163,184,0.18)_36px_37px)]",
+    wash: "absolute inset-0 bg-gradient-to-br from-white/80 via-white/35 to-slate-200/50"
+  };
+}
+
+export function shouldCloseProjectMenuOnPointerDown({
+  menuOpen,
+  clickInsideMenu,
+  clickInsideTrigger
+}: {
+  menuOpen: boolean;
+  clickInsideMenu: boolean;
+  clickInsideTrigger: boolean;
+}) {
+  return menuOpen && !clickInsideMenu && !clickInsideTrigger;
+}
+
+export function getDeleteConfirmationOverlayClass() {
+  return "fixed inset-0 z-50 flex items-center justify-center bg-slate-950/20 px-4 backdrop-blur-sm";
+}
+
+export function shouldPlaceProjectMenuAbove({
+  triggerTop,
+  triggerBottom,
+  viewportHeight,
+  menuHeight,
+  margin = 16
+}: {
+  triggerTop: number;
+  triggerBottom: number;
+  viewportHeight: number;
+  menuHeight: number;
+  margin?: number;
+}) {
+  const availableBelow = viewportHeight - triggerBottom - margin;
+  const availableAbove = triggerTop - margin;
+
+  return availableBelow < menuHeight && availableAbove > availableBelow;
+}
