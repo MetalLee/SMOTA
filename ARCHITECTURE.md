@@ -66,24 +66,25 @@ ProductAgent、ArchitectAgent、PlannerAgent 和 ReviewerAgent 默认通过 `pac
 
 1. 用户通过 Supabase Auth 登录。
 2. 用户用一句话 prompt 创建项目。
-3. 平台创建 `projects` 记录和 `agent_runs` 记录。
-4. ProductAgent、ArchitectAgent 和 PlannerAgent 生成 Harness artifacts。
+3. 平台创建 `projects` 记录和 `agent_runs` 记录，`projects.name` 先使用用户输入前十个字加 `...` 作为占位名，并立即跳转到项目详情页。
+4. 项目详情页自动调用 `POST /api/runs/[runId]/planning/start` 启动 ProductAgent、ArchitectAgent 和 PlannerAgent。
+5. ProductAgent、ArchitectAgent 和 PlannerAgent 逐步生成 Harness artifacts，写入 Supabase 后 Plan tab 通过工作区轮询实时显示变化。
    - ProductAgent 生成项目名称并写入 `projects.name`，同时生成 `PROJECT_BRIEF.md`。
    - ArchitectAgent 生成 `ARCHITECTURE.md` 和 `CODEX_TASK_RULES.md`。
    - PlannerAgent 生成 `ROADMAP.md`，并汇总 `AGENTS.md`。
-5. 用户批准计划。
-6. 服务端 API 创建 Vercel Sandbox。
-7. Sandbox 元数据写入 Supabase。
-8. Harness 文件写入 Sandbox 内的 `/workspace`。
-9. 在 Sandbox 内初始化 Vite React TypeScript 应用。
-10. 在 Sandbox 内执行 OpenCode CLI。
-11. 在 Sandbox 内执行 `pnpm install` 和 `pnpm build`。
-12. 如果构建失败，执行一次自动修复。
-13. 运行日志、状态和构建输出写入 `run_events`。
-14. 扫描文件树并持久化到 Supabase。
-15. 在 Sandbox 内启动 `pnpm dev --host 0.0.0.0 --port 5173`。
-16. 保存 preview URL，并在 Web Console 的 iframe 中展示。
-17. ReviewerAgent 生成 Review Report。
+6. 用户批准计划。
+7. 项目详情页检测到 run 进入 `approved_waiting_for_sandbox` 后，自动调用服务端 API 创建 Vercel Sandbox。
+8. Sandbox 元数据写入 Supabase。
+9. Harness 文件写入 Sandbox 内的 `/workspace`。
+10. 在 Sandbox 内初始化 Vite React TypeScript 应用。
+11. 在 Sandbox 内执行 OpenCode CLI。
+12. 在 Sandbox 内执行 `pnpm install` 和 `pnpm build`。
+13. 如果构建失败，执行一次自动修复。
+14. 运行日志、状态和构建输出写入 `run_events`。
+15. 扫描文件树并持久化到 Supabase。
+16. 在 Sandbox 内启动 `pnpm dev --host 0.0.0.0 --port 5173`。
+17. 保存 preview URL，并在 Web Console 的 iframe 中展示。
+18. ReviewerAgent 生成 Review Report。
 
 ReviewerAgent 在构建成功、文件索引完成后运行。它读取 build result、run events、workspace file index、preview URL 和已知问题，通过直接 LLM API 生成 `REVIEW_REPORT.md`；如果 LLM 不可用，则生成确定性 fallback 报告。
 

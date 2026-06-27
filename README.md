@@ -1,6 +1,6 @@
 # SMOTA Dev Agent
 
-SMOTA 是一个 Atoms-like AI app builder 控制台。用户登录后用一句话创建项目，平台生成五个 Harness Artifact，用户批准计划后由 Vercel Sandbox 执行初始化、实时文件索引、默认预览、OpenCode CLI、安装、构建、一次自动修复和最终预览截图。
+SMOTA 是一个 Atoms-like AI app builder 控制台。用户登录后用一句话创建项目，平台会先创建占位项目并立即跳转到项目详情页，然后由 ProductAgent、ArchitectAgent 和 PlannerAgent 在后台逐步生成五个 Harness Artifact。用户批准计划后，项目详情页会自动启动 Vercel Sandbox，执行初始化、实时文件索引、默认预览、OpenCode CLI、安装、构建、一次自动修复和最终预览截图。
 
 ## 本地启动
 
@@ -111,7 +111,7 @@ MVP 不需要 Local Runner。所有 AI 生成代码、依赖安装、构建和 d
 工作流：
 
 1. 用户批准计划。
-2. `POST /api/runs/[runId]/sandbox/start` 创建 Vercel Sandbox。
+2. 项目详情页检测到 run 进入 `approved_waiting_for_sandbox` 后，自动调用 `POST /api/runs/[runId]/sandbox/start` 创建 Vercel Sandbox。
 3. 服务端写入 Harness 文件到 `/workspace`。
 4. Sandbox 初始化 Vite React TypeScript 应用。
 5. Runner 扫描 Harness 和 Vite 初始文件，增量写入 `workspace_files`。
@@ -227,7 +227,7 @@ const bundle = await createAgentOrchestrator({ llm }).generateHarnessBundle(inpu
 - base URL：`https://api.deepseek.com`
 - temperature：`0.2`
 
-ProductAgent 会根据用户输入提炼项目名称并写入 `projects.name`，同时生成 `PROJECT_BRIEF.md`。ArchitectAgent 会生成 `ARCHITECTURE.md` 和 `CODEX_TASK_RULES.md`。PlannerAgent 会生成 `ROADMAP.md` 并汇总 `AGENTS.md`。ReviewerAgent 会在 Sandbox build 成功后读取 build result、`run_events`、文件索引和已知问题，生成 `REVIEW_REPORT.md`。
+项目创建时，`projects.name` 会先使用用户输入前十个字加 `...` 作为占位名，并立即进入项目详情页。详情页会自动调用 `POST /api/runs/[runId]/planning/start` 启动规划。ProductAgent 会根据用户输入提炼正式项目名称并回写 `projects.name`，同时生成 `PROJECT_BRIEF.md`。ArchitectAgent 会生成 `ARCHITECTURE.md` 和 `CODEX_TASK_RULES.md`。PlannerAgent 会生成 `ROADMAP.md` 并汇总 `AGENTS.md`。ReviewerAgent 会在 Sandbox build 成功后读取 build result、`run_events`、文件索引和已知问题，生成 `REVIEW_REPORT.md`。
 
 DeepSeek 流式响应中的 `reasoning_content` 会被转换为 `run_events.event_type = 'agent.reasoning'`，用于项目详情页左侧 Agent Panel 的“思考过程”展示。这里展示的是可审计的 Agent 推理摘要流，不把系统提示词或服务端密钥写入 Sandbox。若未配置模型 key 或 LLM 调用失败，规划阶段会回退到本地 mock Harness 生成器，ReviewerAgent 会回退到确定性 Review Report。
 
@@ -249,6 +249,8 @@ DeepSeek 流式响应中的 `reasoning_content` 会被转换为 `run_events.even
 
 - 左侧 Agent Panel：项目名、原始需求、run 状态、Sandbox 状态、Agent timeline、task checklist、批准计划、启动 Sandbox、停止 Sandbox、刷新状态。
 - 左侧 Agent Panel：展示 `agent.reasoning` 事件中的最近思考过程，随工作区轮询刷新。
+- Agent timeline 根据 `agent.started`、`agent.reasoning` 和 `agent.completed` 区分等待、进行中和完成状态；只有收到 `agent.completed` 才显示完成图标。
+- Plan Tab：规划阶段会随着 Agent 写入 `artifacts` 逐步显示 `PROJECT_BRIEF.md`、`ARCHITECTURE.md`、`CODEX_TASK_RULES.md`、`ROADMAP.md` 和 `AGENTS.md`。
 - Terminal Tab：轮询 `run_events`，展示 Agent 状态、Sandbox 创建状态、OpenCode 输出、`pnpm install`、`pnpm build`、自动修复、preview ready。stdout 和 stderr 使用不同轻量样式。
 - Files Tab：轮询读取 `workspace_files`，展示创建过程中持续索引的 Harness、Vite 初始文件和 CodingAgent 生成文件。点击文件进入 Editor Tab。
 - Editor Tab：使用 Monaco Editor 只读展示 Sandbox 文件内容。文件内容仍通过服务端 API 从 Sandbox 读取，前端不直接调用 Sandbox SDK。

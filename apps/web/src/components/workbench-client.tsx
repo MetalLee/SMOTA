@@ -31,11 +31,13 @@ import { PendingButton } from "@/components/pending-button";
 import { LoadingOverlay, RouteLoadingLink, WorkspaceLoadingLink } from "@/components/route-loading";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { shouldAutoStartPlanning, shouldAutoStartSandbox } from "@/lib/project-planning";
 import { cn } from "@/lib/utils";
 import {
   formatBytes,
   buildFileTree,
   getAgentDisplayStates,
+  getAgentEventProgress,
   getAgentReasoningEvents,
   getDashboardHref,
   getEditorLanguage,
@@ -107,6 +109,8 @@ export function WorkbenchClient({
   const [loadingAction, setLoadingAction] = useState<"start" | "stop" | null>(null);
   const [previewRefreshing, setPreviewRefreshing] = useState(false);
   const [workspaceNavigating, setWorkspaceNavigating] = useState(false);
+  const [planningStarted, setPlanningStarted] = useState(false);
+  const [sandboxAutoStarted, setSandboxAutoStarted] = useState(false);
   const [, startRefreshTransition] = useTransition();
 
   const queryTab = searchParams.get("tab") ?? initialActiveTab;
@@ -153,6 +157,19 @@ export function WorkbenchClient({
     return () => window.clearInterval(interval);
   }, [refreshWorkspace]);
 
+  useEffect(() => {
+    if (planningStarted || !shouldAutoStartPlanning(run.status, run.current_step)) {
+      return;
+    }
+
+    setPlanningStarted(true);
+    void fetch(`/api/runs/${run.id}/planning/start`, { method: "POST" }).finally(() => {
+      void refreshWorkspace();
+    });
+  }, [planningStarted, refreshWorkspace, run.current_step, run.id, run.status]);
+
+  const sandboxAutoStartPending = shouldAutoStartSandbox(run.status, run.current_step);
+
   async function startSandbox() {
     if (loadingAction !== null) return;
     setLoadingAction("start");
@@ -165,6 +182,15 @@ export function WorkbenchClient({
     setLoadingAction(null);
     await refreshWorkspace();
   }
+
+  useEffect(() => {
+    if (sandboxAutoStarted || !sandboxAutoStartPending) {
+      return;
+    }
+
+    setSandboxAutoStarted(true);
+    void startSandbox();
+  }, [sandboxAutoStartPending, sandboxAutoStarted]);
 
   async function stopSandbox() {
     if (loadingAction !== null) return;
@@ -203,6 +229,7 @@ export function WorkbenchClient({
           events={events}
           controls={controls}
           loadingAction={loadingAction}
+          sandboxAutoStartPending={sandboxAutoStartPending}
           actionError={actionError}
           onStart={startSandbox}
           onStop={stopSandbox}
@@ -270,6 +297,7 @@ function AgentPanel({
   events,
   controls,
   loadingAction,
+  sandboxAutoStartPending,
   actionError,
   onStart,
   onStop,
@@ -281,12 +309,13 @@ function AgentPanel({
   events: RunEventRow[];
   controls: ReturnType<typeof getRunControls>;
   loadingAction: "start" | "stop" | null;
+  sandboxAutoStartPending: boolean;
   actionError: string | null;
   onStart: () => Promise<void>;
   onStop: () => Promise<void>;
   layoutClasses: ReturnType<typeof getWorkbenchLayoutClasses>;
 }) {
-  const eventAgents = useMemo(() => new Set(events.map((event) => event.agent_name).filter((agentName): agentName is string => Boolean(agentName))), [events]);
+  const agentProgress = useMemo(() => getAgentEventProgress(events), [events]);
   const reasoningEvents = useMemo(() => getAgentReasoningEvents(events), [events]);
   const dashboardHref = getDashboardHref();
   const agentStates = useMemo(
@@ -296,9 +325,10 @@ function AgentPanel({
         currentStep: run.current_step,
         sandboxStatus: run.sandbox_status,
         buildStatus: run.build_status,
-        eventAgentNames: [...eventAgents]
+        eventAgentNames: agentProgress.completedAgentNames,
+        activeAgentNames: agentProgress.activeAgentNames
       }),
-    [eventAgents, run.build_status, run.current_step, run.sandbox_status, run.status]
+    [agentProgress, run.build_status, run.current_step, run.sandbox_status, run.status]
   );
 
   return (
@@ -404,9 +434,9 @@ function AgentPanel({
             </form>
           ) : null}
           {controls.primaryAction === "start" ? (
-            <Button type="button" disabled={loadingAction !== null} onClick={() => void onStart()} className="w-full">
-              {loadingAction === "start" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-              启动 Vercel Sandbox 构建
+            <Button type="button" disabled={loadingAction !== null || sandboxAutoStartPending} onClick={() => void onStart()} className="w-full">
+              {loadingAction === "start" || sandboxAutoStartPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+              {sandboxAutoStartPending ? "正在启动 Vercel Sandbox" : "启动 Vercel Sandbox 构建"}
             </Button>
           ) : null}
           {controls.primaryAction === "stop" ? (
@@ -481,6 +511,10 @@ function PreviewTab({ run, sandboxRun, onRefresh, refreshing }: { run: AgentRunR
 }
 
 function PlanTab({ artifacts }: { artifacts: ArtifactRow[] }) {
+  if (!artifacts.length) {
+    return <EmptyState title="正在生成计划" body="ProductAgent、ArchitectAgent 和 PlannerAgent 会逐步写入 Harness 文档，内容会自动出现在这里。" />;
+  }
+
   return (
     <div className="mx-auto max-w-5xl space-y-4">
       {artifacts.map((artifact) => (

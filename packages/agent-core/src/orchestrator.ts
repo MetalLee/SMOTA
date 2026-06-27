@@ -27,6 +27,13 @@ export interface AgentHarnessBundle {
   events: GeneratedRunEvent[];
 }
 
+export interface AgentOrchestratorCallbacks {
+  onEvent?: (event: GeneratedRunEvent) => Promise<void> | void;
+  onProjectName?: (projectName: string) => Promise<void> | void;
+  onArtifact?: (artifact: HarnessArtifact) => Promise<void> | void;
+  onTasks?: (tasks: GeneratedTask[]) => Promise<void> | void;
+}
+
 export function parseJsonObjectFromText(text: string): Record<string, unknown> {
   const trimmed = text.trim();
   const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
@@ -62,6 +69,11 @@ function createEvent(agentName: GeneratedRunEvent["agentName"], eventType: Gener
   };
 }
 
+async function recordEvent(events: GeneratedRunEvent[], callbacks: AgentOrchestratorCallbacks | undefined, event: GeneratedRunEvent) {
+  events.push(event);
+  await callbacks?.onEvent?.(event);
+}
+
 async function generateJson<T>(input: {
   llm: LlmProvider;
   agentName: GeneratedRunEvent["agentName"];
@@ -69,8 +81,10 @@ async function generateJson<T>(input: {
   system: string;
   prompt: string;
   events: GeneratedRunEvent[];
+  callbacks?: AgentOrchestratorCallbacks;
 }): Promise<T> {
-  input.events.push(createEvent(input.agentName, "agent.started", input.step, `${input.agentName} started.`));
+  await recordEvent(input.events, input.callbacks, createEvent(input.agentName, "agent.started", input.step, `${input.agentName} started.`));
+  const pendingReasoningEvents: Array<Promise<void>> = [];
   const result = await input.llm.generateText({
     system: input.system,
     prompt: input.prompt,
@@ -79,11 +93,12 @@ async function generateJson<T>(input: {
     onReasoning: (delta) => {
       const message = delta.trim();
       if (message) {
-        input.events.push(createEvent(input.agentName, "agent.reasoning", input.step, message));
+        pendingReasoningEvents.push(recordEvent(input.events, input.callbacks, createEvent(input.agentName, "agent.reasoning", input.step, message)));
       }
     }
   });
-  input.events.push(createEvent(input.agentName, "agent.completed", input.step, `${input.agentName} completed.`));
+  await Promise.all(pendingReasoningEvents);
+  await recordEvent(input.events, input.callbacks, createEvent(input.agentName, "agent.completed", input.step, `${input.agentName} completed.`));
   return parseJsonObjectFromText(result.content) as T;
 }
 
@@ -140,8 +155,10 @@ export function createAgentOrchestrator(options: { llm?: LlmProvider } = {}) {
   const llm = options.llm ?? createOpenAiCompatibleLlmProvider();
 
   return {
-    async generateHarnessBundle(input: ProjectCreationInput): Promise<AgentHarnessBundle> {
+    async generateHarnessBundle(input: ProjectCreationInput, callbacks?: AgentOrchestratorCallbacks): Promise<AgentHarnessBundle> {
       const events: GeneratedRunEvent[] = [];
+      const artifacts: HarnessArtifact[] = [];
+      const tasks: GeneratedTask[] = [];
 
       const product = await generateJson<ProductAgentOutput>({
         llm,
@@ -149,8 +166,18 @@ export function createAgentOrchestrator(options: { llm?: LlmProvider } = {}) {
         step: "product-brief",
         system: "你是 SMOTA 的 ProductAgent。只输出 JSON，不要输出解释。",
         prompt: productPrompt(input),
-        events
+        events,
+        callbacks
       });
+      await callbacks?.onProjectName?.(product.projectName);
+      const productArtifact = artifact("Project Brief", "PROJECT_BRIEF.md", product.projectBrief);
+      artifacts.push(productArtifact);
+      await callbacks?.onArtifact?.(productArtifact);
+      const productTasks = (product.tasks ?? []).map(normalizeTask);
+      tasks.push(...productTasks);
+      if (productTasks.length) {
+        await callbacks?.onTasks?.(productTasks);
+      }
 
       const architect = await generateJson<ArchitectAgentOutput>({
         llm,
@@ -158,8 +185,14 @@ export function createAgentOrchestrator(options: { llm?: LlmProvider } = {}) {
         step: "architecture",
         system: "你是 SMOTA 的 ArchitectAgent。只输出 JSON，不要输出解释。",
         prompt: architectPrompt(input, product.projectBrief),
-        events
+        events,
+        callbacks
       });
+      const architectureArtifact = artifact("Architecture", "ARCHITECTURE.md", architect.architecture);
+      const rulesArtifact = artifact("Codex Task Rules", "CODEX_TASK_RULES.md", architect.codexRules);
+      artifacts.push(architectureArtifact, rulesArtifact);
+      await callbacks?.onArtifact?.(architectureArtifact);
+      await callbacks?.onArtifact?.(rulesArtifact);
 
       const planner = await generateJson<PlannerAgentOutput>({
         llm,
@@ -167,19 +200,23 @@ export function createAgentOrchestrator(options: { llm?: LlmProvider } = {}) {
         step: "roadmap",
         system: "你是 SMOTA 的 PlannerAgent。只输出 JSON，不要输出解释。",
         prompt: plannerPrompt(input, product.projectBrief, architect.architecture),
-        events
+        events,
+        callbacks
       });
+      const roadmapArtifact = artifact("Roadmap", "ROADMAP.md", planner.roadmap);
+      const agentsArtifact = artifact("Agents", "AGENTS.md", planner.agents);
+      artifacts.push(roadmapArtifact, agentsArtifact);
+      await callbacks?.onArtifact?.(roadmapArtifact);
+      await callbacks?.onArtifact?.(agentsArtifact);
+      const plannerTasks = (planner.tasks ?? []).map((task, index) => normalizeTask(task, tasks.length + index));
+      tasks.push(...plannerTasks);
+      if (plannerTasks.length) {
+        await callbacks?.onTasks?.(plannerTasks);
+      }
 
-      const tasks = [...(product.tasks ?? []), ...(planner.tasks ?? [])].map(normalizeTask);
       return {
         projectName: product.projectName,
-        artifacts: [
-          artifact("Project Brief", "PROJECT_BRIEF.md", product.projectBrief),
-          artifact("Architecture", "ARCHITECTURE.md", architect.architecture),
-          artifact("Codex Task Rules", "CODEX_TASK_RULES.md", architect.codexRules),
-          artifact("Roadmap", "ROADMAP.md", planner.roadmap),
-          artifact("Agents", "AGENTS.md", planner.agents)
-        ],
+        artifacts,
         tasks,
         events
       };

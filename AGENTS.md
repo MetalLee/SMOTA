@@ -41,26 +41,28 @@ ReviewerAgent 接入真实 LLM。它读取 build result、run events、文件索
 ## 开发流程
 
 1. 用户输入一句话需求。
-2. 平台创建 Project。
-3. 平台创建 AgentRun。
-4. ProductAgent、ArchitectAgent 和 PlannerAgent 生成项目内 Harness 文档：
+2. 平台创建 Project，项目名先使用用户输入前十个字加 `...` 作为占位。
+3. 平台创建 AgentRun，并立即跳转到项目详情页。
+4. 项目详情页自动启动规划流程。
+5. ProductAgent、ArchitectAgent 和 PlannerAgent 逐步生成项目内 Harness 文档，Plan tab 根据已写入 artifacts 实时变化：
    - `PROJECT_BRIEF.md`
    - `ARCHITECTURE.md`
    - `ROADMAP.md`
    - `CODEX_TASK_RULES.md`
    - `AGENTS.md`
-5. 用户批准生成的计划。
-6. 平台创建 Vercel Sandbox。
-7. 平台将 Harness 文件写入 Sandbox `/workspace`。
-8. 平台在 Sandbox 内初始化 Vite React TypeScript 应用。
-9. CodingAgent 在 Sandbox 内执行 OpenCode CLI。
-10. BuildAgent 在 Sandbox 内执行 `pnpm install`。
-11. BuildAgent 在 Sandbox 内执行 `pnpm build`。
-12. 如果构建失败，BuildAgent 触发一次自动修复。
-13. 平台扫描 Sandbox 文件树，并将文件索引写入 Supabase。
-14. 平台启动 dev server，并生成 preview URL。
-15. ReviewerAgent 生成 Review Report。
-16. Web 工作台展示 Preview、Editor、Terminal、Plan 和 Files。
+6. ProductAgent 确定正式项目名称后回写数据库。
+7. 用户批准生成的计划。
+8. 项目详情页自动启动 Vercel Sandbox 构建，不需要用户再次点击启动按钮。
+9. 平台将 Harness 文件写入 Sandbox `/workspace`。
+10. 平台在 Sandbox 内初始化 Vite React TypeScript 应用。
+11. CodingAgent 在 Sandbox 内执行 OpenCode CLI。
+12. BuildAgent 在 Sandbox 内执行 `pnpm install`。
+13. BuildAgent 在 Sandbox 内执行 `pnpm build`。
+14. 如果构建失败，BuildAgent 触发一次自动修复。
+15. 平台扫描 Sandbox 文件树，并将文件索引写入 Supabase。
+16. 平台启动 dev server，并生成 preview URL。
+17. ReviewerAgent 生成 Review Report。
+18. Web 工作台展示 Preview、Editor、Terminal、Plan 和 Files。
 
 ## Agent 状态持久化
 

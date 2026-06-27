@@ -69,5 +69,61 @@ describe("agent orchestrator", () => {
       "PlannerAgent",
       "PlannerAgent"
     ]);
+    expect(bundle.events.map((event) => `${event.agentName}:${event.eventType}`)).toEqual([
+      "ProductAgent:agent.started",
+      "ProductAgent:agent.reasoning",
+      "ProductAgent:agent.completed",
+      "ArchitectAgent:agent.started",
+      "ArchitectAgent:agent.reasoning",
+      "ArchitectAgent:agent.completed",
+      "PlannerAgent:agent.started",
+      "PlannerAgent:agent.reasoning",
+      "PlannerAgent:agent.completed"
+    ]);
+  });
+
+  it("emits artifacts and project name as each planning agent completes", async () => {
+    const provider = createScriptedProvider([
+      JSON.stringify({
+        projectName: "宠物诊所预约台",
+        projectBrief: "# 项目简介\n宠物诊所",
+        tasks: []
+      }),
+      JSON.stringify({
+        architecture: "# 架构\nReact",
+        codexRules: "# CODEX 任务规则\n浅色 UI"
+      }),
+      JSON.stringify({
+        roadmap: "# 路线图\nPhase 1",
+        agents: "# AGENTS\nPlannerAgent",
+        tasks: []
+      })
+    ]);
+    const emitted: string[] = [];
+
+    await createAgentOrchestrator({ llm: provider }).generateHarnessBundle(
+      {
+        prompt: "为宠物诊所创建预约管理后台",
+        mode: "plan-first",
+        appType: "Admin"
+      },
+      {
+        onProjectName: async (projectName) => {
+          emitted.push(`name:${projectName}`);
+        },
+        onArtifact: async (artifact) => {
+          emitted.push(`artifact:${artifact.path}`);
+        }
+      }
+    );
+
+    expect(emitted).toEqual([
+      "name:宠物诊所预约台",
+      "artifact:PROJECT_BRIEF.md",
+      "artifact:ARCHITECTURE.md",
+      "artifact:CODEX_TASK_RULES.md",
+      "artifact:ROADMAP.md",
+      "artifact:AGENTS.md"
+    ]);
   });
 });

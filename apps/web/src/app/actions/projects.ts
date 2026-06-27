@@ -2,8 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { createAgentOrchestrator, generateHarnessBundle } from "@smota/agent-core";
-import { deriveProjectName, parseProjectCreationInput } from "@smota/shared";
+import { parseProjectCreationInput } from "@smota/shared";
+import { buildPlaceholderProjectName } from "@/lib/project-planning";
 import { createClient } from "@/lib/supabase/server";
 
 async function requireUser() {
@@ -23,17 +23,7 @@ async function requireUser() {
 export async function createProjectAction(formData: FormData) {
   const input = parseProjectCreationInput(formData);
   const { supabase, user } = await requireUser();
-  const fallbackBundle = generateHarnessBundle(input);
-  let bundle = fallbackBundle;
-  let planningError: string | null = null;
-
-  try {
-    bundle = await createAgentOrchestrator().generateHarnessBundle(input);
-  } catch (error) {
-    planningError = error instanceof Error ? error.message : "真实 LLM 规划生成失败，已回退到本地计划生成器。";
-  }
-
-  const projectName = bundle.projectName || deriveProjectName(input.prompt);
+  const projectName = buildPlaceholderProjectName(input.prompt);
 
   const { data: project, error: projectError } = await supabase
     .from("projects")
@@ -60,8 +50,8 @@ export async function createProjectAction(formData: FormData) {
       project_id: project.id,
       mode: input.mode,
       user_prompt: input.prompt,
-      status: "pending_approval",
-      current_step: "plan_ready",
+      status: "planning",
+      current_step: "planning_queued",
       runner_provider: "vercel_sandbox",
       sandbox_runtime: process.env.SANDBOX_RUNTIME ?? "node24",
       sandbox_timeout_ms: Number(process.env.SANDBOX_TIMEOUT_MS ?? 2700000),
@@ -74,60 +64,30 @@ export async function createProjectAction(formData: FormData) {
     throw new Error(runError?.message ?? "创建 AgentRun 失败。");
   }
 
-  const artifacts = bundle.artifacts.map((artifact) => ({
+  const { error: taskError } = await supabase.from("tasks").insert({
     owner_id: user.id,
     project_id: project.id,
     run_id: run.id,
-    type: artifact.type,
-    title: artifact.title,
-    path: artifact.path,
-    content: artifact.content
-  }));
+    title: "生成项目计划",
+    description: "ProductAgent、ArchitectAgent 和 PlannerAgent 正在生成 Harness 文档。",
+    status: "in_progress",
+    sort_order: 1
+  });
 
-  const tasks = bundle.tasks.map((task) => ({
+  const { error: eventError } = await supabase.from("run_events").insert({
     owner_id: user.id,
     project_id: project.id,
     run_id: run.id,
-    title: task.title,
-    description: task.description,
-    status: task.status,
-    sort_order: task.sortOrder
-  }));
+    agent_name: null,
+    event_type: "run.created",
+    step: "planning_queued",
+    message: "项目已创建，正在准备生成计划。",
+    stream: "system",
+    metadata: {}
+  });
 
-  const events = bundle.events.map((event) => ({
-    owner_id: user.id,
-    project_id: project.id,
-    run_id: run.id,
-    agent_name: event.agentName,
-    event_type: event.eventType,
-    step: event.step,
-    message: event.message,
-    stream: event.stream ?? "system",
-    metadata: event.metadata ?? {}
-  }));
-
-  if (planningError) {
-    events.push({
-      owner_id: user.id,
-      project_id: project.id,
-      run_id: run.id,
-      agent_name: "PlannerAgent",
-      event_type: "agent.reasoning",
-      step: "llm_fallback",
-      message: planningError,
-      stream: "stderr",
-      metadata: { fallback: true }
-    });
-  }
-
-  const [{ error: artifactsError }, { error: tasksError }, { error: eventsError }] = await Promise.all([
-    supabase.from("artifacts").insert(artifacts),
-    supabase.from("tasks").insert(tasks),
-    supabase.from("run_events").insert(events)
-  ]);
-
-  if (artifactsError || tasksError || eventsError) {
-    throw new Error(artifactsError?.message ?? tasksError?.message ?? eventsError?.message ?? "保存计划失败。");
+  if (taskError || eventError) {
+    throw new Error(taskError?.message ?? eventError?.message ?? "保存项目计划状态失败。");
   }
 
   redirect(`/projects/${project.id}`);
@@ -160,9 +120,9 @@ export async function approvePlanAction(formData: FormData) {
     agent_name: "PlannerAgent",
     event_type: "plan.approved",
     step: "approval",
-    message: "用户已批准计划。Vercel Sandbox 构建将在后续阶段接入，本阶段不会启动 Sandbox。",
+    message: "用户已批准计划。Vercel Sandbox 构建将自动启动。",
     stream: "system",
-    metadata: { sandboxStarted: false }
+    metadata: { sandboxAutoStart: true }
   });
 
   if (eventError) {

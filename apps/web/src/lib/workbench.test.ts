@@ -9,6 +9,7 @@ import {
   getWorkbenchHeaderActions,
   getFileContentErrorLabel,
   getLoadingOverlayClasses,
+  getAgentEventProgress,
   getAgentReasoningEvents,
   getRunControls,
   getTaskDisplayStatus,
@@ -123,6 +124,49 @@ describe("workbench helpers", () => {
 
   it("uses dashboard as the workbench brand destination", () => {
     expect(getDashboardHref()).toBe("/dashboard");
+  });
+
+  it("derives waiting, running, and completed planning agent states from event types", () => {
+    const productRunning = getAgentEventProgress([
+      { agent_name: "ProductAgent", event_type: "agent.started" },
+      { agent_name: "ProductAgent", event_type: "agent.reasoning" }
+    ]);
+
+    expect(
+      getAgentDisplayStates({
+        runStatus: "planning",
+        currentStep: "planning_running",
+        sandboxStatus: null,
+        buildStatus: null,
+        eventAgentNames: productRunning.completedAgentNames,
+        activeAgentNames: productRunning.activeAgentNames
+      })
+    ).toMatchObject({
+      ProductAgent: "in_progress",
+      ArchitectAgent: "todo",
+      PlannerAgent: "todo"
+    });
+
+    const architectRunning = getAgentEventProgress([
+      { agent_name: "ProductAgent", event_type: "agent.started" },
+      { agent_name: "ProductAgent", event_type: "agent.completed" },
+      { agent_name: "ArchitectAgent", event_type: "agent.started" }
+    ]);
+
+    expect(
+      getAgentDisplayStates({
+        runStatus: "planning",
+        currentStep: "planning_running",
+        sandboxStatus: null,
+        buildStatus: null,
+        eventAgentNames: architectRunning.completedAgentNames,
+        activeAgentNames: architectRunning.activeAgentNames
+      })
+    ).toMatchObject({
+      ProductAgent: "done",
+      ArchitectAgent: "in_progress",
+      PlannerAgent: "todo"
+    });
   });
 
   it("keeps recent agent reasoning events for the left panel", () => {

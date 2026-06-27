@@ -48,6 +48,7 @@ export interface AgentDisplayStateInput {
   sandboxStatus: string | null;
   buildStatus: string | null;
   eventAgentNames: string[];
+  activeAgentNames?: string[];
 }
 
 export interface ReasoningEventInput {
@@ -55,6 +56,16 @@ export interface ReasoningEventInput {
   event_type: string;
   message: string | null;
   created_at: string;
+}
+
+export interface AgentProgressEventInput {
+  agent_name: string | null;
+  event_type: string;
+}
+
+export interface AgentEventProgress {
+  completedAgentNames: string[];
+  activeAgentNames: string[];
 }
 
 export interface AgentReasoningEvent {
@@ -216,6 +227,7 @@ export function getTaskDisplayStatus(taskStatus: string, runStatus: string, sand
 
 export function getAgentDisplayStates(input: AgentDisplayStateInput): Record<AgentDisplayName, DisplayProgressStatus> {
   const completedAgents = new Set(input.eventAgentNames);
+  const activeAgents = new Set(input.activeAgentNames ?? []);
   const currentStep = input.currentStep?.toLowerCase() ?? "";
   const sandboxStatus = input.sandboxStatus ?? "";
   const buildStatus = input.buildStatus ?? "";
@@ -225,12 +237,38 @@ export function getAgentDisplayStates(input: AgentDisplayStateInput): Record<Age
   const buildStarted = ["installing", "building", "fixing", "previewing"].includes(sandboxStatus) || buildStatus === "running" || buildStatus === "succeeded";
 
   return {
-    ProductAgent: runSucceeded || completedAgents.has("ProductAgent") ? "done" : currentStep.includes("product") ? "in_progress" : "todo",
-    ArchitectAgent: runSucceeded || completedAgents.has("ArchitectAgent") ? "done" : currentStep.includes("architect") ? "in_progress" : "todo",
-    PlannerAgent: runSucceeded || completedAgents.has("PlannerAgent") ? "done" : currentStep.includes("planner") || currentStep.includes("plan") ? "in_progress" : "todo",
+    ProductAgent: runSucceeded || completedAgents.has("ProductAgent") ? "done" : activeAgents.has("ProductAgent") || currentStep.includes("product") ? "in_progress" : "todo",
+    ArchitectAgent: runSucceeded || completedAgents.has("ArchitectAgent") ? "done" : activeAgents.has("ArchitectAgent") || currentStep.includes("architect") ? "in_progress" : "todo",
+    PlannerAgent: runSucceeded || completedAgents.has("PlannerAgent") ? "done" : activeAgents.has("PlannerAgent") || currentStep.includes("planner") ? "in_progress" : "todo",
     CodingAgent: runSucceeded || codingDone ? "done" : sandboxStarted || currentStep.includes("coding") || currentStep.includes("opencode") ? "in_progress" : "todo",
     BuildAgent: runSucceeded || buildStatus === "succeeded" || sandboxStatus === "previewing" ? "done" : buildStarted ? "in_progress" : "todo",
     ReviewerAgent: runSucceeded ? "done" : currentStep.includes("review") ? "in_progress" : "todo"
+  };
+}
+
+export function getAgentEventProgress(events: AgentProgressEventInput[]): AgentEventProgress {
+  const completed = new Set<string>();
+  const active = new Set<string>();
+
+  for (const event of events) {
+    if (!event.agent_name) {
+      continue;
+    }
+
+    if (event.event_type === "agent.completed") {
+      completed.add(event.agent_name);
+      active.delete(event.agent_name);
+      continue;
+    }
+
+    if ((event.event_type === "agent.started" || event.event_type === "agent.reasoning") && !completed.has(event.agent_name)) {
+      active.add(event.agent_name);
+    }
+  }
+
+  return {
+    completedAgentNames: [...completed],
+    activeAgentNames: [...active]
   };
 }
 
