@@ -116,6 +116,13 @@ export function buildViteDevServerArgs(port: number): string[] {
   return ["dev", "--config", "smota.vite.config.ts", "--host", "0.0.0.0", "--port", String(port), "--strictPort"];
 }
 
+export function buildRealtimeSandboxPhasePlan() {
+  return {
+    fileScanPhases: ["harness_written", "init_vite", "preview_ready", "opencode_run", "install_after_opencode", "build"],
+    previewStartsBeforeOpenCode: true
+  };
+}
+
 async function upsertSandboxRun(
   supabase: SupabaseClient,
   context: RunContext,
@@ -214,6 +221,7 @@ export async function runVercelSandboxWorkflow(runId: string, options: WorkflowO
 
     await updateRunStatus(supabase, context, { current_step: "writing_harness", sandbox_status: "generating" });
     await writeHarnessArtifacts(sandbox, harnessArtifacts);
+    await scanWorkspaceFiles({ sandbox, supabase, context, phase: "harness_written" });
 
     await runSandboxCommand({
       supabase,
@@ -224,6 +232,7 @@ export async function runVercelSandboxWorkflow(runId: string, options: WorkflowO
       args: ["-lc", "tmpdir=$(mktemp -d) && cd \"$tmpdir\" && npm create vite@latest app -- --template react-ts && cp -a app/. /workspace && rm -rf \"$tmpdir\""],
       timeoutMs: 10 * 60 * 1000
     });
+    await scanWorkspaceFiles({ sandbox, supabase, context, phase: "init_vite" });
 
     await runSandboxCommand({
       supabase,
@@ -235,6 +244,35 @@ export async function runVercelSandboxWorkflow(runId: string, options: WorkflowO
       cwd: WORKSPACE_DIR,
       timeoutMs: 10 * 60 * 1000
     });
+
+    await runSandboxCommand({ supabase, context, sandbox, step: "corepack", cmd: "corepack", args: ["enable"], cwd: WORKSPACE_DIR });
+    await updateRunStatus(supabase, context, { current_step: "installing_initial", sandbox_status: "installing" });
+    await runSandboxCommand({ supabase, context, sandbox, step: "install_initial", cmd: "pnpm", args: ["install"], cwd: WORKSPACE_DIR, timeoutMs: 20 * 60 * 1000 });
+
+    await sandbox.writeFiles([
+      {
+        path: `${WORKSPACE_DIR}/smota.vite.config.ts`,
+        content: buildVitePreviewConfigContent()
+      }
+    ]);
+
+    await updateRunStatus(supabase, context, { current_step: "starting_preview", sandbox_status: "previewing" });
+    await startDetachedSandboxCommand({
+      supabase,
+      context,
+      sandbox,
+      step: "dev_server",
+      cmd: "pnpm",
+      args: buildViteDevServerArgs(config.publishPort),
+      cwd: WORKSPACE_DIR,
+      timeoutMs: config.timeoutMs
+    });
+
+    const previewUrl = getSandboxPreviewUrl(sandbox, config.publishPort);
+    await updateRunStatus(supabase, context, { current_step: "preview_ready", sandbox_preview_url: previewUrl, sandbox_status: "previewing" });
+    await supabase.from("sandbox_runs").update({ status: "previewing", preview_url: previewUrl }).eq("run_id", run.id);
+    await scanWorkspaceFiles({ sandbox, supabase, context, phase: "preview_ready" });
+    await insertRunEvent(supabase, context, { eventType: "preview.ready", step: "preview", message: `Preview is ready: ${previewUrl}`, payload: { previewUrl, phase: "default_vite_home" } });
 
     if (env.OPENCODE_CLI_INSTALL_COMMAND) {
       await runSandboxCommand({
@@ -308,10 +346,11 @@ export async function runVercelSandboxWorkflow(runId: string, options: WorkflowO
     if (opencodeRun.exitCode !== 0) {
       throw new Error(await commandOutput(opencodeRun));
     }
+    await scanWorkspaceFiles({ sandbox, supabase, context, phase: "opencode_run" });
 
-    await runSandboxCommand({ supabase, context, sandbox, step: "corepack", cmd: "corepack", args: ["enable"], cwd: WORKSPACE_DIR });
-    await updateRunStatus(supabase, context, { current_step: "installing", sandbox_status: "installing" });
-    await runSandboxCommand({ supabase, context, sandbox, step: "install", cmd: "pnpm", args: ["install"], cwd: WORKSPACE_DIR, timeoutMs: 20 * 60 * 1000 });
+    await updateRunStatus(supabase, context, { current_step: "installing_after_opencode", sandbox_status: "installing" });
+    await runSandboxCommand({ supabase, context, sandbox, step: "install_after_opencode", cmd: "pnpm", args: ["install"], cwd: WORKSPACE_DIR, timeoutMs: 20 * 60 * 1000 });
+    await scanWorkspaceFiles({ sandbox, supabase, context, phase: "install_after_opencode" });
 
     await insertRunEvent(supabase, context, { eventType: "build.started", step: "build", message: "Running pnpm build." });
     await updateRunStatus(supabase, context, { current_step: "building", build_status: "running", sandbox_status: "building" });
@@ -336,7 +375,10 @@ export async function runVercelSandboxWorkflow(runId: string, options: WorkflowO
           env: codingAgentEnv,
           timeoutMs: config.timeoutMs
         });
+        await scanWorkspaceFiles({ sandbox, supabase, context, phase: "fix" });
         await insertRunEvent(supabase, context, { eventType: "fix.finished", step: "fix", message: "Automatic repair attempt finished." });
+        await runSandboxCommand({ supabase, context, sandbox, step: "install_after_fix", cmd: "pnpm", args: ["install"], cwd: WORKSPACE_DIR, timeoutMs: 20 * 60 * 1000 });
+        await scanWorkspaceFiles({ sandbox, supabase, context, phase: "install_after_fix" });
         build = await runSandboxCommand({ supabase, context, sandbox, step: "build_retry", cmd: "pnpm", args: ["build"], cwd: WORKSPACE_DIR, timeoutMs: 20 * 60 * 1000 });
       }
     }
@@ -351,28 +393,8 @@ export async function runVercelSandboxWorkflow(runId: string, options: WorkflowO
 
     await insertRunEvent(supabase, context, { eventType: "build.succeeded", step: "build", message: "pnpm build succeeded." });
     await updateRunStatus(supabase, context, { build_status: "succeeded", current_step: "indexing_files" });
-    await scanWorkspaceFiles({ sandbox, supabase, context });
+    await scanWorkspaceFiles({ sandbox, supabase, context, phase: "build" });
 
-    await sandbox.writeFiles([
-      {
-        path: `${WORKSPACE_DIR}/smota.vite.config.ts`,
-        content: buildVitePreviewConfigContent()
-      }
-    ]);
-
-    await updateRunStatus(supabase, context, { current_step: "starting_preview", sandbox_status: "previewing" });
-    await startDetachedSandboxCommand({
-      supabase,
-      context,
-      sandbox,
-      step: "dev_server",
-      cmd: "pnpm",
-      args: buildViteDevServerArgs(config.publishPort),
-      cwd: WORKSPACE_DIR,
-      timeoutMs: config.timeoutMs
-    });
-
-    const previewUrl = getSandboxPreviewUrl(sandbox, config.publishPort);
     await updateRunStatus(supabase, context, { status: "succeeded", current_step: "succeeded", sandbox_preview_url: previewUrl, sandbox_status: "previewing" });
     await supabase.from("sandbox_runs").update({ status: "previewing", preview_url: previewUrl }).eq("run_id", run.id);
     const screenshotBucket = getPreviewScreenshotBucket(env);

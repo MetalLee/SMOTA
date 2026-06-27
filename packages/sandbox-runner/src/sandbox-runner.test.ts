@@ -4,6 +4,7 @@ import {
   buildGitSetupShellCommand,
   buildOpenCodeConfig,
   buildOpenCodeRunShellCommand,
+  buildRealtimeSandboxPhasePlan,
   buildViteDevServerArgs,
   buildVitePreviewConfigContent,
   buildSandboxCodingAgentEnvironment,
@@ -11,6 +12,7 @@ import {
   buildSandboxRuntimeConfig,
   getVercelSandboxToken,
   isProbablyBinary,
+  scanWorkspaceFiles,
   sanitizeWorkspacePath,
   toSandboxEnvironment
 } from "./index";
@@ -152,5 +154,99 @@ describe("sandbox runner helpers", () => {
 
   it("starts Vite dev with the SMOTA preview overlay config", () => {
     expect(buildViteDevServerArgs(5173)).toEqual(["dev", "--config", "smota.vite.config.ts", "--host", "0.0.0.0", "--port", "5173", "--strictPort"]);
+  });
+
+  it("plans realtime file scans around early preview startup", () => {
+    expect(buildRealtimeSandboxPhasePlan()).toEqual({
+      fileScanPhases: ["harness_written", "init_vite", "preview_ready", "opencode_run", "install_after_opencode", "build"],
+      previewStartsBeforeOpenCode: true
+    });
+  });
+
+  it("upserts workspace file indexes with the scan phase instead of clearing rows first", async () => {
+    const calls: Array<{ table: string; action: string; payload?: unknown; options?: unknown }> = [];
+    const supabase = {
+      from(table: string) {
+        return {
+          upsert(payload: unknown, options?: unknown) {
+            calls.push({ table, action: "upsert", payload, options });
+            return Promise.resolve({ error: null });
+          },
+          insert(payload: unknown) {
+            calls.push({ table, action: "insert", payload });
+            return Promise.resolve({ error: null });
+          },
+          delete() {
+            calls.push({ table, action: "delete" });
+            return {
+              eq() {
+                return this;
+              }
+            };
+          }
+        };
+      }
+    };
+    const sandbox = {
+      fs: {
+        async mkdir() {
+          return undefined;
+        },
+        async readdir(path: string) {
+          if (path === "/workspace") {
+            return [
+              { name: "src", isDirectory: () => true, isFile: () => false },
+              { name: "package.json", isDirectory: () => false, isFile: () => true }
+            ];
+          }
+          if (path === "/workspace/src") {
+            return [{ name: "App.tsx", isDirectory: () => false, isFile: () => true }];
+          }
+          return [];
+        },
+        async stat(path: string) {
+          const directory = path === "/workspace/src";
+          return {
+            size: directory ? 0 : path.endsWith("App.tsx") ? 123 : 456,
+            mtime: new Date("2026-06-28T00:00:00.000Z"),
+            isDirectory: () => directory,
+            isFile: () => !directory
+          };
+        }
+      },
+      async writeFiles() {
+        return undefined;
+      },
+      async readFileToBuffer() {
+        return null;
+      }
+    };
+
+    const rows = await scanWorkspaceFiles({
+      sandbox,
+      supabase: supabase as never,
+      context: { ownerId: "owner-1", projectId: "project-1", runId: "run-1" },
+      phase: "init_vite"
+    });
+
+    expect(rows.map((row) => row.path)).toEqual(["src/App.tsx", "package.json"]);
+    expect(calls.some((call) => call.table === "workspace_files" && call.action === "delete")).toBe(false);
+    expect(calls).toContainEqual(
+      expect.objectContaining({
+        table: "workspace_files",
+        action: "upsert",
+        options: expect.objectContaining({ onConflict: "owner_id,project_id,run_id,path" })
+      })
+    );
+    expect(calls).toContainEqual(
+      expect.objectContaining({
+        table: "run_events",
+        action: "insert",
+        payload: expect.objectContaining({
+          event_type: "file.indexed",
+          payload: expect.objectContaining({ phase: "init_vite", count: 2 })
+        })
+      })
+    );
   });
 });

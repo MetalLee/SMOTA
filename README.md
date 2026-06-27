@@ -1,6 +1,6 @@
 # SMOTA Dev Agent
 
-SMOTA 是一个 Atoms-like AI app builder 控制台。用户登录后用一句话创建项目，平台生成五个 Harness Artifact，用户批准计划后由 Vercel Sandbox 执行 OpenCode CLI、安装、构建、一次自动修复、文件索引和预览。
+SMOTA 是一个 Atoms-like AI app builder 控制台。用户登录后用一句话创建项目，平台生成五个 Harness Artifact，用户批准计划后由 Vercel Sandbox 执行初始化、实时文件索引、默认预览、OpenCode CLI、安装、构建、一次自动修复和最终预览截图。
 
 ## 本地启动
 
@@ -43,6 +43,7 @@ pnpm dev
 -- supabase/migrations/0002_rls.sql
 -- supabase/migrations/0003_sandbox_runner.sql
 -- supabase/migrations/0004_preview_images.sql
+-- supabase/migrations/0005_workspace_file_upsert.sql
 ```
 
 迁移会创建 `projects`、`agent_runs`、`tasks`、`artifacts`、`workspace_files`、`run_events`、`sandbox_runs` 等业务表。所有业务表都包含 `owner_id` 并启用 RLS，用户只能读取和修改自己的数据。
@@ -123,16 +124,19 @@ MVP 不需要 Local Runner。所有 AI 生成代码、依赖安装、构建和 d
 2. `POST /api/runs/[runId]/sandbox/start` 创建 Vercel Sandbox。
 3. 服务端写入 Harness 文件到 `/workspace`。
 4. Sandbox 初始化 Vite React TypeScript 应用。
-5. Sandbox 执行 OpenCode CLI。
-6. Sandbox 执行 `pnpm install` 和 `pnpm build`。
-7. 构建失败时只执行一次 OpenCode 自动修复。
-8. 扫描 `/workspace` 文件树，写入 `workspace_files`。
-9. 写入 `smota.vite.config.ts` preview overlay，并启动 `pnpm dev --config smota.vite.config.ts --host 0.0.0.0 --port 5173 --strictPort`。
-10. 保存 `agent_runs.sandbox_preview_url` 和 `sandbox_runs.preview_url`。
-11. ReviewAgent 在 Runner 上校验 Playwright Chromium 是否存在。
-12. ReviewAgent 在 Runner 上使用 Playwright Chromium 对 Sandbox preview URL 截图。
-13. Runner 将 PNG 上传到 `SUPABASE_PREVIEW_BUCKET`，路径为 `{owner_id}/{project_id}/{run_id}/preview.png`。
-14. 保存公开图片 URL 到 `sandbox_runs.preview_image_url`，`/my-projects` 卡片可直接展示。
+5. Runner 扫描 Harness 和 Vite 初始文件，增量写入 `workspace_files`。
+6. Sandbox 执行 `corepack enable` 和初始 `pnpm install`。
+7. Runner 写入 `smota.vite.config.ts` preview overlay，并启动 `pnpm dev --config smota.vite.config.ts --host 0.0.0.0 --port 5173 --strictPort`。
+8. Runner 立即保存 `agent_runs.sandbox_preview_url` 和 `sandbox_runs.preview_url`，应用浏览器可展示默认 Vite Home。
+9. Sandbox 执行 OpenCode CLI。
+10. Runner 扫描 OpenCode 生成的文件，并再次执行 `pnpm install` 以安装新增依赖。
+11. Sandbox 执行 `pnpm build`。
+12. 构建失败时只执行一次 OpenCode 自动修复，修复后再次安装依赖和构建。
+13. Runner 在 Harness、Vite 初始化、preview ready、OpenCode、安装后和 build 后持续增量扫描 `/workspace` 文件树，写入 `workspace_files`。
+14. ReviewAgent 在 Runner 上校验 Playwright Chromium 是否存在。
+15. ReviewAgent 在 Runner 上使用 Playwright Chromium 对 Sandbox preview URL 截图。
+16. Runner 将 PNG 上传到 `SUPABASE_PREVIEW_BUCKET`，路径为 `{owner_id}/{project_id}/{run_id}/preview.png`。
+17. 保存公开图片 URL 到 `sandbox_runs.preview_image_url`，`/my-projects` 卡片可直接展示。
 
 `smota.vite.config.ts` 会 merge 生成应用的 `vite.config.ts`，并为 Sandbox preview 设置 `server.allowedHosts: true`，以接受 Vercel Sandbox 动态预览域名的 Host header。
 
@@ -252,9 +256,9 @@ const model = createAgentChatModel();
 
 - 左侧 Agent Panel：项目名、原始需求、run 状态、Sandbox 状态、Agent timeline、task checklist、批准计划、启动 Sandbox、停止 Sandbox、刷新状态。
 - Terminal Tab：轮询 `run_events`，展示 Agent 状态、Sandbox 创建状态、OpenCode 输出、`pnpm install`、`pnpm build`、自动修复、preview ready。stdout 和 stderr 使用不同轻量样式。
-- Files Tab：读取 `workspace_files`，展示 path、file_type、change_type、size、last_modified_at。点击文件进入 Editor Tab。
-- Editor Tab：使用 Monaco Editor 只读展示 Sandbox 文件内容。
-- Preview Tab：读取 `agent_runs.sandbox_preview_url`，有 URL 时 iframe 展示，无 URL 时提示等待 Sandbox 启动应用预览。
+- Files Tab：轮询读取 `workspace_files`，展示创建过程中持续索引的 Harness、Vite 初始文件和 CodingAgent 生成文件。点击文件进入 Editor Tab。
+- Editor Tab：使用 Monaco Editor 只读展示 Sandbox 文件内容。文件内容仍通过服务端 API 从 Sandbox 读取，前端不直接调用 Sandbox SDK。
+- Preview Tab：读取 `agent_runs.sandbox_preview_url`，初始依赖安装完成后 iframe 会先展示默认 Vite Home，随后随着 Sandbox 内文件变化继续显示最新页面；无 URL 时提示正在准备应用浏览器。
 - Plan Tab：使用 `react-markdown` 展示五个 Harness Artifact 和 Review Report。
 
 Editor Tab 会显示以下固定错误：
@@ -285,6 +289,6 @@ MVP 当前不做 Local Runner，也不把生成应用发布到生产环境。这
 5. 批准计划。
 6. 启动 Vercel Sandbox 构建。
 7. 在 Terminal Tab 查看 Sandbox 日志。
-8. 在 Files Tab 查看生成文件。
-9. 点击文件，在 Editor Tab 读取只读内容。
-10. 在 Preview Tab 查看 Sandbox dev server URL。
+8. 在 Files Tab 查看创建过程中逐步出现的文件。
+9. 点击文件，在 Editor Tab 通过服务端 API 读取只读内容。
+10. 在 Preview Tab 查看先出现的默认 Vite Home，以及后续生成页面。

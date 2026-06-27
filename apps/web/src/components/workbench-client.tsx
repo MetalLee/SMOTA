@@ -41,6 +41,7 @@ import {
   getExpandedDirectorySet,
   getFileContentErrorLabel,
   getLoadingOverlayClasses,
+  getRealtimeTabEmptyState,
   getRunControls,
   getTaskDisplayStatus,
   getWorkbenchHeaderActions,
@@ -251,8 +252,8 @@ export function WorkbenchClient({
         <section className={cn(layoutClasses.content, "relative")}>
           {activeTab === "plan" ? <PlanTab artifacts={artifacts} /> : null}
           {activeTab === "terminal" ? <TerminalTab events={events} run={run} sandboxRun={sandboxRun} /> : null}
-          {activeTab === "files" ? <FilesTab projectId={project.id} files={files} onNavigateStart={() => setWorkspaceNavigating(true)} /> : null}
-          {activeTab === "editor" ? <EditorTab projectId={project.id} filePath={selectedFilePath} files={files} /> : null}
+          {activeTab === "files" ? <FilesTab projectId={project.id} files={files} sandboxStatus={run.sandbox_status ?? sandboxRun?.status ?? null} onNavigateStart={() => setWorkspaceNavigating(true)} /> : null}
+          {activeTab === "editor" ? <EditorTab projectId={project.id} filePath={selectedFilePath} files={files} sandboxStatus={run.sandbox_status ?? sandboxRun?.status ?? null} /> : null}
           {activeTab === "preview" ? <PreviewTab run={run} sandboxRun={sandboxRun} onRefresh={refreshAll} refreshing={previewRefreshing} /> : null}
           {workspaceNavigating ? <LoadingOverlay className={overlayClasses.workspaceOverlay} label="正在加载工作区" /> : null}
         </section>
@@ -427,10 +428,11 @@ function PreviewTab({ run, sandboxRun, onRefresh, refreshing }: { run: AgentRunR
   const previewUrl = run.sandbox_preview_url ?? sandboxRun?.preview_url ?? null;
 
   if (!previewUrl) {
+    const copy = getRealtimeTabEmptyState("preview", run.sandbox_status ?? sandboxRun?.status ?? null);
     return (
       <EmptyState
-        title="等待 Vercel Sandbox 启动应用预览"
-        body={`当前 Sandbox 状态：${run.sandbox_status ?? sandboxRun?.status ?? "not_ready"}`}
+        title={copy.title}
+        body={copy.body}
       />
     );
   }
@@ -509,9 +511,10 @@ function TerminalLine({ event }: { event: RunEventRow }) {
   );
 }
 
-function FilesTab({ projectId, files, onNavigateStart }: { projectId: string; files: WorkspaceFileRow[]; onNavigateStart: () => void }) {
+function FilesTab({ projectId, files, sandboxStatus, onNavigateStart }: { projectId: string; files: WorkspaceFileRow[]; sandboxStatus: string | null; onNavigateStart: () => void }) {
   if (!files.length) {
-    return <EmptyState title="等待 Vercel Sandbox 生成文件" body="Sandbox 构建阶段完成后，这里会展示扫描到的文件索引。" />;
+    const copy = getRealtimeTabEmptyState("files", sandboxStatus);
+    return <EmptyState title={copy.title} body={copy.body} />;
   }
 
   return (
@@ -546,11 +549,13 @@ function FilesTab({ projectId, files, onNavigateStart }: { projectId: string; fi
 function EditorTab({
   projectId,
   filePath,
-  files
+  files,
+  sandboxStatus
 }: {
   projectId: string;
   filePath: string;
   files: WorkspaceFileRow[];
+  sandboxStatus: string | null;
 }) {
   const [content, setContent] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -616,7 +621,7 @@ function EditorTab({
               onToggleDirectory={toggleDirectory}
             />
           ) : (
-            <div className="px-3 py-4 text-sm leading-6 text-slate-400">等待 Vercel Sandbox 生成文件</div>
+            <div className="px-3 py-4 text-sm leading-6 text-slate-400">{getRealtimeTabEmptyState("editor", sandboxStatus).body}</div>
           )}
         </div>
       </div>
@@ -627,7 +632,9 @@ function EditorTab({
           <div className="text-xs text-slate-400">read-only</div>
         </div>
         {!filePath ? (
-          <div className="flex h-[calc(100%-3rem)] items-center justify-center p-8 text-center text-sm text-slate-500">在左侧文件树选择文件后，会在这里以只读模式打开。</div>
+          <div className="flex h-[calc(100%-3rem)] items-center justify-center p-8 text-center text-sm text-slate-500">
+            {files.length ? "在左侧文件树选择文件后，会在这里以只读模式打开。" : getRealtimeTabEmptyState("editor", sandboxStatus).body}
+          </div>
         ) : error ? (
           <div className="flex h-[calc(100%-3rem)] items-center justify-center p-8 text-center text-sm text-red-600">
             <XCircle className="mr-2 h-4 w-4" />

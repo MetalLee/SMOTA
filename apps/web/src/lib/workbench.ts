@@ -28,6 +28,13 @@ export interface WorkbenchHeaderAction {
   label: string;
 }
 
+export type RealtimeWorkbenchTab = "preview" | "editor" | "files";
+
+export interface EmptyStateCopy {
+  title: string;
+  body: string;
+}
+
 export interface FileTreeNode {
   name: string;
   path: string;
@@ -112,6 +119,29 @@ export function getWorkbenchHeaderActions(): WorkbenchHeaderAction[] {
     { id: "share", label: "分享" },
     { id: "publish", label: "发布" }
   ];
+}
+
+export function getRealtimeTabEmptyState(tab: RealtimeWorkbenchTab, sandboxStatus: string | null): EmptyStateCopy {
+  const status = sandboxStatus ?? "not_ready";
+
+  if (tab === "preview") {
+    return {
+      title: "正在准备应用浏览器",
+      body: `Vite 默认首页会在初始化和依赖安装后自动出现，随后会随着 Sandbox 内文件变化继续刷新。当前 Sandbox 状态：${status}`
+    };
+  }
+
+  if (tab === "editor") {
+    return {
+      title: "正在同步 Sandbox 文件",
+      body: `创建过程中写入 /workspace 的文件会持续出现在这里，选择文件后将通过服务端 API 只读打开。当前 Sandbox 状态：${status}`
+    };
+  }
+
+  return {
+    title: "正在索引 Sandbox 文件",
+    body: `Harness、Vite 初始文件和 CodingAgent 生成的文件会在创建过程中逐步显示。当前 Sandbox 状态：${status}`
+  };
 }
 
 function sortFileTreeNodes(nodes: FileTreeNode[]) {

@@ -36,6 +36,7 @@ export async function scanWorkspaceFiles(params: {
   sandbox: FileSandbox;
   supabase: SupabaseClient;
   context: RunContext;
+  phase?: string;
 }) {
   const rows: Array<Record<string, unknown>> = [];
 
@@ -75,16 +76,17 @@ export async function scanWorkspaceFiles(params: {
 
   await walk(WORKSPACE_DIR);
 
-  await params.supabase.from("workspace_files").delete().eq("project_id", params.context.projectId).eq("owner_id", params.context.ownerId);
   if (rows.length) {
-    await params.supabase.from("workspace_files").insert(rows);
+    await params.supabase.from("workspace_files").upsert(rows, {
+      onConflict: "owner_id,project_id,run_id,path"
+    });
   }
 
   await insertRunEvent(params.supabase, params.context, {
     eventType: "file.indexed",
-    step: "index_files",
+    step: params.phase ?? "index_files",
     message: `Indexed ${rows.length} workspace files.`,
-    payload: { count: rows.length }
+    payload: { count: rows.length, phase: params.phase ?? "index_files" }
   });
 
   return rows;

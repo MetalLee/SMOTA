@@ -5,6 +5,7 @@ import {
   getDashboardHref,
   getEditorLanguage,
   getExpandedDirectorySet,
+  getRealtimeTabEmptyState,
   getWorkbenchHeaderActions,
   getFileContentErrorLabel,
   getLoadingOverlayClasses,
@@ -121,6 +122,21 @@ describe("workbench helpers", () => {
 
   it("uses dashboard as the workbench brand destination", () => {
     expect(getDashboardHref()).toBe("/dashboard");
+  });
+
+  it("describes realtime Sandbox visibility in Preview, Editor, and Files empty states", () => {
+    expect(getRealtimeTabEmptyState("preview", "installing")).toEqual({
+      title: "正在准备应用浏览器",
+      body: "Vite 默认首页会在初始化和依赖安装后自动出现，随后会随着 Sandbox 内文件变化继续刷新。当前 Sandbox 状态：installing"
+    });
+    expect(getRealtimeTabEmptyState("editor", "generating")).toEqual({
+      title: "正在同步 Sandbox 文件",
+      body: "创建过程中写入 /workspace 的文件会持续出现在这里，选择文件后将通过服务端 API 只读打开。当前 Sandbox 状态：generating"
+    });
+    expect(getRealtimeTabEmptyState("files", null)).toEqual({
+      title: "正在索引 Sandbox 文件",
+      body: "Harness、Vite 初始文件和 CodingAgent 生成的文件会在创建过程中逐步显示。当前 Sandbox 状态：not_ready"
+    });
   });
 
   it("builds a sorted nested file tree from workspace paths", () => {
