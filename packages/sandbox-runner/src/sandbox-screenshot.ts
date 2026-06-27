@@ -66,7 +66,11 @@ export function buildPreviewScreenshotObjectPath(input: { ownerId: string; proje
 }
 
 export function getRunnerChromiumInstallCommand() {
-  return "pnpm --filter @smota/sandbox-runner exec playwright install chromium";
+  return "pnpm --filter @smota/sandbox-runner install:chromium";
+}
+
+export function configureRunnerPlaywrightEnvironment(env: Record<string, string | undefined> = process.env) {
+  env.PLAYWRIGHT_BROWSERS_PATH ??= "0";
 }
 
 export function assertRunnerChromiumAvailable({
@@ -85,6 +89,7 @@ export function assertRunnerChromiumAvailable({
 }
 
 export async function loadRunnerChromium(): Promise<RunnerChromium> {
+  configureRunnerPlaywrightEnvironment();
   const require = createRequire(import.meta.url);
   const playwright = require("playwright") as { chromium: RunnerChromium };
   return playwright.chromium;

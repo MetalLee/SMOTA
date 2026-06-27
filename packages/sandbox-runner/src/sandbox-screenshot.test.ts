@@ -7,6 +7,7 @@ import {
   getPreviewScreenshotConfig,
   getRunnerChromiumInstallCommand,
   assertRunnerChromiumAvailable,
+  configureRunnerPlaywrightEnvironment,
   shouldCapturePreviewScreenshot
 } from "./sandbox-screenshot";
 
@@ -41,13 +42,30 @@ describe("sandbox preview screenshots", () => {
   });
 
   it("documents how to install Chromium on the Runner", () => {
-    expect(getRunnerChromiumInstallCommand()).toBe("pnpm --filter @smota/sandbox-runner exec playwright install chromium");
+    expect(getRunnerChromiumInstallCommand()).toBe("pnpm --filter @smota/sandbox-runner install:chromium");
+  });
+
+  it("uses project-local Playwright browsers by default", () => {
+    const env: Record<string, string | undefined> = {};
+
+    configureRunnerPlaywrightEnvironment(env);
+
+    expect(env.PLAYWRIGHT_BROWSERS_PATH).toBe("0");
+  });
+
+  it("preserves an explicit Playwright browser path override", () => {
+    const env: Record<string, string | undefined> = { PLAYWRIGHT_BROWSERS_PATH: "/custom/ms-playwright" };
+
+    configureRunnerPlaywrightEnvironment(env);
+
+    expect(env.PLAYWRIGHT_BROWSERS_PATH).toBe("/custom/ms-playwright");
   });
 
   it("keeps Playwright visible to the Next.js server bundle tracer", () => {
     const source = readFileSync(new URL("./sandbox-screenshot.ts", import.meta.url), "utf8");
 
     expect(source).toContain('require("playwright")');
+    expect(source).toContain("configureRunnerPlaywrightEnvironment");
     expect(source).not.toContain("new Function");
     expect(source).not.toContain("import('playwright')");
   });
@@ -58,7 +76,7 @@ describe("sandbox preview screenshots", () => {
         chromium: { executablePath: () => "/missing/chromium" },
         fileExists: () => false
       })
-    ).toThrow(/Runner Chromium is not installed.*pnpm --filter @smota\/sandbox-runner exec playwright install chromium/s);
+    ).toThrow(/Runner Chromium is not installed.*pnpm --filter @smota\/sandbox-runner install:chromium/s);
   });
 
   it("captures screenshots from the Runner using Playwright Chromium", async () => {

@@ -105,10 +105,10 @@ VERCEL_PROJECT_ID=
 Runner 环境必须安装 Playwright Chromium：
 
 ```bash
-pnpm --filter @smota/sandbox-runner exec playwright install chromium
+pnpm --filter @smota/sandbox-runner install:chromium
 ```
 
-仓库根 `postinstall` 会自动执行该安装步骤；如果部署环境禁用了 lifecycle scripts，需要在安装后手动运行上面的命令。
+仓库根 `postinstall` 会自动执行该安装步骤。该脚本默认设置 `PLAYWRIGHT_BROWSERS_PATH=0`，把 Chromium 安装到项目依赖目录中，便于 Vercel 函数输出追踪将浏览器二进制一起打包；如果部署环境禁用了 lifecycle scripts，需要在安装后手动运行上面的命令。
 
 Vercel Web Console 的服务端函数也必须能解析 `playwright` 包。`@smota/web` 直接声明 `playwright` 依赖，并在 Next.js 服务端构建中将 `playwright` / `playwright-core` 外部化，避免 webpack 内联 Playwright 内部 bundle，同时保证截图运行时可以从部署包加载该依赖。
 
@@ -161,7 +161,7 @@ SUPABASE_PREVIEW_BUCKET=smota-previews
 ```
 
 3. 执行迁移到远程数据库，确保 `sandbox_runs.preview_image_url` 存在。
-4. 本地触发 Sandbox workflow 前，先运行 `pnpm --filter @smota/sandbox-runner exec playwright install chromium`，确保本地 Runner 有 Chromium。
+4. 本地触发 Sandbox workflow 前，先运行 `pnpm --filter @smota/sandbox-runner install:chromium`，确保本地 Runner 有 Chromium。
 5. 本地触发 Sandbox workflow 时，ReviewAgent 在 Runner 上截图；Runner 使用 service role key 上传截图到 bucket，并通过 `getPublicUrl()` 生成图片 URL。
 
 本地 Supabase CLI：

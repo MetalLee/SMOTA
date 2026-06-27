@@ -234,6 +234,7 @@ Sandbox 负责：
 - Runner 在启动 preview 前写入 `smota.vite.config.ts`，merge 生成应用的 `vite.config.ts` 并设置 `server.allowedHosts: true`，允许 Vercel Sandbox 动态预览域名访问 dev server。
 - 发布后的 preview URL 保存到 `sandbox_runs.preview_url` 和 `agent_runs.sandbox_preview_url`。
 - ReviewAgent 在 preview ready 后于 Runner 上校验 Playwright Chromium，使用 Playwright Chromium 对 Sandbox preview URL 截图，将 PNG 上传到 Supabase Storage bucket，并将公开图片 URL 保存到 `sandbox_runs.preview_image_url`。
+- Runner 构建/安装阶段通过 `pnpm --filter @smota/sandbox-runner install:chromium` 自动安装 Chromium，并默认使用 `PLAYWRIGHT_BROWSERS_PATH=0` 将浏览器二进制放入项目依赖目录，便于 Vercel 函数输出追踪打包。
 - Web Console 在 iframe 中嵌入 preview URL。
 
 ## Vercel 环境变量
