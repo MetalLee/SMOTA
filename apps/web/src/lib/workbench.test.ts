@@ -239,7 +239,8 @@ describe("workbench helpers", () => {
       })
     ).toMatchObject({
       CodingAgent: "todo",
-      BuildAgent: "todo"
+      BuildAgent: "todo",
+      ReviewerAgent: "todo"
     });
   });
 

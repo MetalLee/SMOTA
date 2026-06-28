@@ -503,6 +503,7 @@ export function getAgentDisplayStates(input: AgentDisplayStateInput): Record<Age
     runWorkflowActive &&
     (currentStep.includes("installing_after_opencode") || currentStep.includes("building") || currentStep.includes("fixing") || buildStatus === "running");
   const buildDone = runSucceeded || (runWorkflowActive && buildStatus === "succeeded");
+  const reviewActive = runWorkflowActive && (currentStep === "review_report" || currentStep === "review_screenshot" || currentStep.startsWith("review_"));
 
   return {
     ProductAgent: runSucceeded || completedAgents.has("ProductAgent") ? "done" : activeAgents.has("ProductAgent") || currentStep.includes("product") ? "in_progress" : "todo",
@@ -510,7 +511,7 @@ export function getAgentDisplayStates(input: AgentDisplayStateInput): Record<Age
     PlannerAgent: runSucceeded || completedAgents.has("PlannerAgent") ? "done" : activeAgents.has("PlannerAgent") || currentStep.includes("planner") ? "in_progress" : "todo",
     CodingAgent: codingFailed ? "failed" : codingDone ? "done" : codingActive ? "in_progress" : "todo",
     BuildAgent: buildFailed ? "failed" : buildDone ? "done" : buildActive ? "in_progress" : "todo",
-    ReviewerAgent: runSucceeded ? "done" : currentStep.includes("review") ? "in_progress" : "todo"
+    ReviewerAgent: runSucceeded ? "done" : reviewActive ? "in_progress" : "todo"
   };
 }
 
