@@ -409,14 +409,13 @@ export function getExpandedDirectorySet(filePath: string): Set<string> {
 }
 
 export function getTaskDisplayStatus(taskStatus: string, runStatus: string, sandboxStatus: string | null): DisplayProgressStatus {
-  if (taskStatus === "done" || runStatus === "succeeded") return "done";
+  void runStatus;
+  void sandboxStatus;
 
-  if (runStatus === "failed" || taskStatus === "failed") {
+  if (taskStatus === "done") return "done";
+  if (taskStatus === "in_progress") return "in_progress";
+  if (taskStatus === "failed") {
     return "failed";
-  }
-
-  if (taskStatus === "in_progress") {
-    return "in_progress";
   }
 
   return "todo";
@@ -428,29 +427,26 @@ function isAgentDisplayName(value: string | null | undefined): value is AgentDis
   return Boolean(value && AGENT_DISPLAY_NAMES.includes(value as AgentDisplayName));
 }
 
-function getTaskDisplayStatusFromAgent<T extends TaskDisplayInput>(
+function getNonCodingTaskAgentStatus<T extends TaskDisplayInput>(
   task: T,
   agentStates?: Partial<Record<AgentDisplayName, DisplayProgressStatus>>
 ): DisplayProgressStatus | null {
-  if (!agentStates || !isAgentDisplayName(task.agent_name)) {
+  if (!agentStates || !isAgentDisplayName(task.agent_name) || task.agent_name === "CodingAgent") {
     return null;
   }
 
   return agentStates[task.agent_name] ?? null;
 }
 
-function isCodingTaskDisplayActive(runStatus: string, currentStep: string | null | undefined) {
-  if (runStatus !== "running") return false;
-  const step = currentStep?.toLowerCase() ?? "";
-  return step.includes("opencode") || step.includes("coding");
-}
+const TASK_AGENT_ORDER = new Map<AgentDisplayName, number>(AGENT_DISPLAY_NAMES.map((agentName, index) => [agentName, index]));
 
-const TASK_STATUS_ORDER: Record<DisplayProgressStatus, number> = {
-  done: 0,
-  in_progress: 1,
-  failed: 2,
-  todo: 3
-};
+function getTaskAgentOrder(task: TaskDisplayInput): number {
+  if (!isAgentDisplayName(task.agent_name)) {
+    return AGENT_DISPLAY_NAMES.length;
+  }
+
+  return TASK_AGENT_ORDER.get(task.agent_name) ?? AGENT_DISPLAY_NAMES.length;
+}
 
 export function getTaskDisplayItems<T extends TaskDisplayInput>(
   tasks: T[],
@@ -459,30 +455,20 @@ export function getTaskDisplayItems<T extends TaskDisplayInput>(
   currentStep?: string | null,
   agentStates?: Partial<Record<AgentDisplayName, DisplayProgressStatus>>
 ): Array<TaskDisplayItem<T>> {
-  const hasPersistedActiveTask = tasks.some((task) => task.status === "in_progress");
-  const activeTaskId =
-    !agentStates && !hasPersistedActiveTask && isCodingTaskDisplayActive(runStatus, currentStep)
-      ? [...tasks]
-          .filter((task) => task.status !== "done")
-          .sort((a, b) => {
-            const sortDelta = a.sort_order - b.sort_order;
-            if (sortDelta !== 0) return sortDelta;
-
-            return a.created_at.localeCompare(b.created_at);
-          })[0]?.id
-      : null;
+  void currentStep;
+  void agentStates;
 
   return tasks
     .map((task) => {
-      const agentStatus = getTaskDisplayStatusFromAgent(task, agentStates);
+      const nonCodingAgentStatus = getNonCodingTaskAgentStatus(task, agentStates);
       return {
         task,
-        displayStatus: agentStatus ?? (task.id === activeTaskId ? "in_progress" : getTaskDisplayStatus(task.status, runStatus, sandboxStatus))
+        displayStatus: nonCodingAgentStatus ?? getTaskDisplayStatus(task.status, runStatus, sandboxStatus)
       };
     })
     .sort((a, b) => {
-      const statusDelta = TASK_STATUS_ORDER[a.displayStatus] - TASK_STATUS_ORDER[b.displayStatus];
-      if (statusDelta !== 0) return statusDelta;
+      const agentDelta = getTaskAgentOrder(a.task) - getTaskAgentOrder(b.task);
+      if (agentDelta !== 0) return agentDelta;
 
       const sortDelta = a.task.sort_order - b.task.sort_order;
       if (sortDelta !== 0) return sortDelta;

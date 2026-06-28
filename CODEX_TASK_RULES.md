@@ -41,6 +41,9 @@
 - Sandbox 任务必须可恢复。
 - 必须把 run 状态、sandbox name、当前 step 和 step results 持久化到 Supabase。
 - 必须把 stdout/stderr、Agent 状态和构建结果持久化到 `run_events`。
+- `tasks` 表是任务分解和任务进度唯一事实来源；`ROADMAP.md` 只作为可读计划说明，OpenCode 不得再维护另一套独立任务清单。
+- CodingAgent Prompt 只能包含分配给 CodingAgent 的可回写 task id，并要求 OpenCode 在任务开始、完成或失败时通过 HTTP API 更新这些任务的 `tasks.status`。
+- OpenCode 只能使用当前 Run 的短期任务回写 token 更新 `agent_name = CodingAgent` 的任务；这些任务状态更新不能修改 `agent_runs.status`、`current_step` 或 Agent 时间线状态。非 CodingAgent 任务继续按分配的 Agent 状态展示。
 - 继续开发 Run 必须优先复用当前项目已有 Sandbox 文件；克隆项目即使没有语义上的 parent run，只要存在克隆写入的 workspace 文件索引，也必须按增量修改处理。
 - 复用已有 workspace 时不得重新执行 Vite 初始化，不得覆盖 `/workspace` 中已有应用骨架。
 - Sandbox 恢复后若预览端口未监听，服务端必须通过封装层探测并重启 Vite dev server；预览恢复检查必须有并发保护，且每个 preview URL 最多自动触发一次，避免常规轮询持续创建 Sandbox 命令；健康判断必须以 `127.0.0.1:5173` HTTP 可访问为准，不能用 `pgrep` 之类的进程匹配代替；客户端不能直接调用 Sandbox SDK。
@@ -55,6 +58,7 @@
   - 左侧 Agent Panel。
   - 右侧主画布。
 - 项目工作台必须优先支持概览、应用预览器、编辑器、终端和文件；概览 tab 位于应用预览器左侧。
+- 左侧计划任务必须按 `ProductAgent`、`ArchitectAgent`、`PlannerAgent`、`CodingAgent`、`BuildAgent`、`ReviewerAgent` 的 Agent 顺序分组展示；同一个 Agent 下的任务保持 PlannerAgent 生成时的原始顺序。
 - 文件 tab 必须按目录层级以树状表格展示 `workspace_files`，而不是平铺列表。
 - MVP 阶段避免加入复杂拖拽编辑器。
 - 所有会触发请求的按钮必须有防重复提交机制：

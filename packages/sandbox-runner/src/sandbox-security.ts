@@ -1,8 +1,12 @@
+import { createHmac } from "node:crypto";
+
 const SANDBOX_ENV_ALLOWLIST = [
   "DEEPSEEK_API_KEY",
   "OPENAI_API_KEY",
   "OPENAI_BASE_URL",
-  "OPENAI_MODEL"
+  "OPENAI_MODEL",
+  "SMOTA_TASK_UPDATE_URL",
+  "SMOTA_TASK_UPDATE_TOKEN"
 ] as const;
 
 export const DEEPSEEK_OPENAI_BASE_URL = "https://api.deepseek.com";
@@ -38,6 +42,24 @@ export function buildSandboxCodingAgentEnvironment(source: Record<string, string
     OPENAI_BASE_URL: source.OPENAI_BASE_URL || DEEPSEEK_OPENAI_BASE_URL,
     OPENAI_MODEL: source.OPENAI_MODEL || DEEPSEEK_V4_PRO_MODEL
   });
+}
+
+export function getTaskUpdateSecret(source: Record<string, string | undefined>): string {
+  return source.SMOTA_TASK_UPDATE_SECRET ?? source.SUPABASE_SERVICE_ROLE_KEY ?? "";
+}
+
+export function buildTaskUpdateToken(input: { ownerId: string; runId: string; secret: string }): string {
+  return createHmac("sha256", input.secret).update(`${input.ownerId}:${input.runId}`).digest("hex");
+}
+
+export function buildTaskUpdateApiBaseUrl(input: { env: Record<string, string | undefined>; runId: string }): string {
+  const appUrl =
+    input.env.SMOTA_APP_URL ??
+    input.env.NEXT_PUBLIC_APP_URL ??
+    input.env.NEXT_PUBLIC_SITE_URL ??
+    (input.env.VERCEL_URL ? `https://${input.env.VERCEL_URL}` : "");
+  const trimmedAppUrl = appUrl.replace(/\/+$/, "");
+  return `${trimmedAppUrl}/api/runs/${input.runId}`;
 }
 
 export function isProbablyBinary(content: Buffer): boolean {

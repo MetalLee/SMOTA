@@ -15,7 +15,14 @@ import {
   shouldCapturePreviewScreenshot,
   uploadPreviewScreenshot
 } from "./sandbox-screenshot";
-import { DEEPSEEK_OPENAI_BASE_URL, DEEPSEEK_V4_PRO_MODEL, OPENCODE_DEEPSEEK_V4_PRO_MODEL, buildSandboxCodingAgentEnvironment } from "./sandbox-security";
+import {
+  DEEPSEEK_OPENAI_BASE_URL,
+  DEEPSEEK_V4_PRO_MODEL,
+  buildSandboxCodingAgentEnvironment,
+  buildTaskUpdateApiBaseUrl,
+  buildTaskUpdateToken,
+  getTaskUpdateSecret
+} from "./sandbox-security";
 
 const HARNESS_PATHS = ["PROJECT_BRIEF.md", "ARCHITECTURE.md", "ROADMAP.md", "CODEX_TASK_RULES.md", "AGENTS.md"];
 
@@ -24,12 +31,52 @@ interface WorkflowOptions {
   env?: Record<string, string | undefined>;
 }
 
+interface CodingTask {
+  id: string;
+  title: string;
+  description: string | null;
+  status: string;
+  agentName: string | null;
+}
+
+function formatCodingTaskLines(tasks: CodingTask[]) {
+  return tasks.filter((task) => task.agentName === "CodingAgent").map((task, index) =>
+    [
+      `${index + 1}. ${task.title}`,
+      `   Task ID: ${task.id}`,
+      `   Status: ${task.status}`,
+      `   Agent: ${task.agentName ?? "Unassigned"}`,
+      task.description ? `   Description: ${task.description}` : null
+    ]
+      .filter(Boolean)
+      .join("\n")
+  );
+}
+
+function taskStatusProtocol(input: { taskUpdateUrl: string; taskUpdateTokenEnvName: string }) {
+  return [
+    "Task tracking protocol:",
+    "Approved tasks are the only task list. Do not create a separate task breakdown or track progress only in prose.",
+    "Work only on tasks assigned to CodingAgent. Before starting a task, mark it in_progress. After completing it, mark it done. If it cannot be completed, mark it failed and explain why in your final response.",
+    "Use this exact HTTP pattern to update a task:",
+    "```bash",
+    `curl -fsS -X POST "${input.taskUpdateUrl}/tasks/<taskId>/status" \\`,
+    `  -H "Authorization: Bearer $${input.taskUpdateTokenEnvName}" \\`,
+    '  -H "Content-Type: application/json" \\',
+    `  -d '{"status":"done"}'`,
+    "```",
+    "Allowed status values are: todo, in_progress, done, failed."
+  ].join("\n");
+}
+
 export function buildCodingAgentPrompt(input: {
   projectPrompt: string;
-  tasks: Array<{ title: string; description: string | null }>;
+  tasks: CodingTask[];
   artifacts: Array<{ path: string; content: string }>;
+  taskUpdateUrl: string;
+  taskUpdateTokenEnvName: string;
 }) {
-  const taskLines = input.tasks.map((task, index) => `${index + 1}. ${task.title}${task.description ? `\n   ${task.description}` : ""}`);
+  const taskLines = formatCodingTaskLines(input.tasks);
   const artifactSections = input.artifacts.map((artifact) => `## ${artifact.path}\n\n${artifact.content}`);
 
   return [
@@ -43,6 +90,8 @@ export function buildCodingAgentPrompt(input: {
     "",
     "Approved tasks:",
     taskLines.join("\n"),
+    "",
+    taskStatusProtocol({ taskUpdateUrl: input.taskUpdateUrl, taskUpdateTokenEnvName: input.taskUpdateTokenEnvName }),
     "",
     "Harness artifacts:",
     artifactSections.join("\n\n---\n\n")
@@ -124,12 +173,14 @@ export function buildContinuationCodingAgentPrompt(input: {
   originalProjectPrompt: string;
   changePrompt: string;
   sourceKind: "own_previous_run" | "cloned_workspace";
-  tasks: Array<{ title: string; description: string | null }>;
+  tasks: CodingTask[];
   artifacts: Array<{ path: string; content: string }>;
   workspaceFiles: string[];
+  taskUpdateUrl: string;
+  taskUpdateTokenEnvName: string;
 }) {
   const sourceLabel = input.sourceKind === "cloned_workspace" ? "克隆来的已有应用" : "上一轮已生成应用";
-  const taskLines = input.tasks.map((task, index) => `${index + 1}. ${task.title}${task.description ? `\n   ${task.description}` : ""}`);
+  const taskLines = formatCodingTaskLines(input.tasks);
   const artifactSections = input.artifacts.map((artifact) => `## ${artifact.path}\n\n${artifact.content}`);
   const fileLines = input.workspaceFiles.length ? input.workspaceFiles.map((path) => `- ${path}`).join("\n") : "- 暂无文件索引，请先查看 /workspace";
 
@@ -149,6 +200,8 @@ export function buildContinuationCodingAgentPrompt(input: {
     "",
     "Approved incremental tasks:",
     taskLines.join("\n"),
+    "",
+    taskStatusProtocol({ taskUpdateUrl: input.taskUpdateUrl, taskUpdateTokenEnvName: input.taskUpdateTokenEnvName }),
     "",
     "Current run Harness artifacts:",
     artifactSections.join("\n\n---\n\n")
@@ -202,7 +255,13 @@ export async function runVercelSandboxWorkflow(runId: string, options: WorkflowO
 
   const context: RunContext = { ownerId: run.owner_id, projectId: run.project_id, runId: run.id };
   const config = buildSandboxRuntimeConfig(env);
-  const codingAgentEnv = buildSandboxCodingAgentEnvironment(env);
+  const taskUpdateSecret = getTaskUpdateSecret(env);
+  const taskUpdateUrl = buildTaskUpdateApiBaseUrl({ env, runId: run.id });
+  const codingAgentEnv = buildSandboxCodingAgentEnvironment({
+    ...env,
+    SMOTA_TASK_UPDATE_URL: taskUpdateUrl,
+    SMOTA_TASK_UPDATE_TOKEN: taskUpdateSecret ? buildTaskUpdateToken({ ownerId: run.owner_id, runId: run.id, secret: taskUpdateSecret }) : undefined
+  });
   const opencodeCommand = env.OPENCODE_CLI_COMMAND ?? "opencode";
   const opencodeModel = buildOpenCodeModel(env);
   const existingSandboxName = typeof run.sandbox_name === "string" && run.sandbox_name.trim() ? run.sandbox_name.trim() : null;
@@ -261,7 +320,7 @@ export async function runVercelSandboxWorkflow(runId: string, options: WorkflowO
         .eq("run_id", run.id)
         .eq("owner_id", run.owner_id)
         .in("path", HARNESS_PATHS),
-      supabase.from("tasks").select("title, description").eq("run_id", run.id).eq("owner_id", run.owner_id).order("sort_order"),
+      supabase.from("tasks").select("id, title, description, status, agent_name, sort_order").eq("run_id", run.id).eq("owner_id", run.owner_id).order("sort_order"),
       supabase.from("workspace_files").select("path").eq("project_id", run.project_id).eq("owner_id", run.owner_id).order("path", { ascending: true })
     ]);
 
@@ -392,14 +451,30 @@ export async function runVercelSandboxWorkflow(runId: string, options: WorkflowO
           originalProjectPrompt: project.prompt ?? project.description ?? "",
           changePrompt: run.user_prompt,
           sourceKind: project.source_project_id ? "cloned_workspace" : "own_previous_run",
-          tasks: tasks ?? [],
+          tasks: (tasks ?? []).map((task: { id: string; title: string; description: string | null; status: string; agent_name: string | null }) => ({
+            id: task.id,
+            title: task.title,
+            description: task.description,
+            status: task.status,
+            agentName: task.agent_name
+          })),
           artifacts: harnessArtifacts,
-          workspaceFiles: (workspaceFiles ?? []).map((file: { path: string }) => file.path)
+          workspaceFiles: (workspaceFiles ?? []).map((file: { path: string }) => file.path),
+          taskUpdateUrl,
+          taskUpdateTokenEnvName: "SMOTA_TASK_UPDATE_TOKEN"
         })
       : buildCodingAgentPrompt({
           projectPrompt: project.prompt ?? run.user_prompt,
-          tasks: tasks ?? [],
-          artifacts: harnessArtifacts
+          tasks: (tasks ?? []).map((task: { id: string; title: string; description: string | null; status: string; agent_name: string | null }) => ({
+            id: task.id,
+            title: task.title,
+            description: task.description,
+            status: task.status,
+            agentName: task.agent_name
+          })),
+          artifacts: harnessArtifacts,
+          taskUpdateUrl,
+          taskUpdateTokenEnvName: "SMOTA_TASK_UPDATE_TOKEN"
         });
 
     await updateRunStatus(supabase, context, { current_step: "running_opencode", sandbox_status: "generating" });

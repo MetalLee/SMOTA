@@ -81,17 +81,17 @@ describe("workbench helpers", () => {
   it("keeps future plan tasks waiting until their own task status becomes active", () => {
     expect(getTaskDisplayStatus("todo", "running", "building")).toBe("todo");
     expect(getTaskDisplayStatus("in_progress", "running", "building")).toBe("in_progress");
-    expect(getTaskDisplayStatus("todo", "succeeded", "previewing")).toBe("done");
+    expect(getTaskDisplayStatus("todo", "succeeded", "previewing")).toBe("todo");
     expect(getTaskDisplayStatus("done", "running", "building")).toBe("done");
   });
 
-  it("marks unfinished plan tasks as failed when the run fails", () => {
-    expect(getTaskDisplayStatus("todo", "failed", "failed")).toBe("failed");
-    expect(getTaskDisplayStatus("in_progress", "failed", "failed")).toBe("failed");
+  it("keeps task status independent when the run fails", () => {
+    expect(getTaskDisplayStatus("todo", "failed", "failed")).toBe("todo");
+    expect(getTaskDisplayStatus("in_progress", "failed", "failed")).toBe("in_progress");
     expect(getTaskDisplayStatus("done", "failed", "failed")).toBe("done");
   });
 
-  it("surfaces the first unfinished plan task while CodingAgent is running", () => {
+  it("shows only persisted task progress while CodingAgent is running", () => {
     expect(
       getTaskDisplayItems(
         [
@@ -103,7 +103,7 @@ describe("workbench helpers", () => {
         "generating",
         "running_opencode"
       ).map((item) => `${item.displayStatus}:${item.task.id}`)
-    ).toEqual(["done:done", "in_progress:active", "todo:waiting"]);
+    ).toEqual(["done:done", "todo:active", "todo:waiting"]);
 
     expect(
       getTaskDisplayItems(
@@ -118,7 +118,7 @@ describe("workbench helpers", () => {
     ).toEqual(["todo:first", "todo:second"]);
   });
 
-  it("syncs task display status from its assigned agent state", () => {
+  it("binds non-CodingAgent task display to agent state while CodingAgent tasks use persisted status", () => {
     const agentStates = {
       ProductAgent: "done",
       ArchitectAgent: "done",
@@ -141,7 +141,7 @@ describe("workbench helpers", () => {
         "plan_ready",
         agentStates
       ).map((item) => `${item.displayStatus}:${item.task.id}`)
-    ).toEqual(["done:planned", "in_progress:coded", "todo:built", "todo:reviewed"]);
+    ).toEqual(["done:planned", "todo:coded", "todo:built", "todo:reviewed"]);
   });
 
   it("derives agent display states from persisted events and sandbox progress", () => {
@@ -243,7 +243,7 @@ describe("workbench helpers", () => {
     });
   });
 
-  it("marks the failed sandbox agent as failed for bound tasks", () => {
+  it("marks non-CodingAgent bound tasks failed when the sandbox agent failed", () => {
     const agentStates = getAgentDisplayStates({
       runStatus: "failed",
       currentStep: "build_failed",
@@ -262,6 +262,16 @@ describe("workbench helpers", () => {
         agentStates
       )[0]?.displayStatus
     ).toBe("failed");
+
+    expect(
+      getTaskDisplayItems(
+        [{ id: "code", title: "实现页面", description: null, status: "todo", agent_name: "CodingAgent", sort_order: 1, created_at: "2026-06-28T00:00:01.000Z" }],
+        "failed",
+        "failed",
+        "build_failed",
+        agentStates
+      )[0]?.displayStatus
+    ).toBe("todo");
   });
 
   it("throttles automatic Sandbox preview recovery checks while the preview tab has a URL", () => {
@@ -432,19 +442,22 @@ describe("workbench helpers", () => {
     });
   });
 
-  it("sorts task display items into a stable progress order", () => {
+  it("sorts task display items by agent flow while preserving original order within each agent", () => {
     expect(
       getTaskDisplayItems(
         [
-          { id: "todo-late", title: "开发环境搭建", description: null, status: "todo", sort_order: 1, created_at: "2026-06-28T00:00:03.000Z" },
-          { id: "done-late", title: "输出产品简要", description: null, status: "done", sort_order: 9, created_at: "2026-06-28T00:00:02.000Z" },
-          { id: "doing", title: "创建线框图", description: null, status: "in_progress", sort_order: 2, created_at: "2026-06-28T00:00:01.000Z" },
-          { id: "todo-early", title: "收集设计素材", description: null, status: "todo", sort_order: 0, created_at: "2026-06-28T00:00:00.000Z" }
+          { id: "review", title: "输出报告", description: null, status: "todo", agent_name: "ReviewerAgent", sort_order: 1, created_at: "2026-06-28T00:00:03.000Z" },
+          { id: "code-second", title: "补充交互", description: null, status: "done", agent_name: "CodingAgent", sort_order: 4, created_at: "2026-06-28T00:00:04.000Z" },
+          { id: "product", title: "确认目标", description: null, status: "failed", agent_name: "ProductAgent", sort_order: 9, created_at: "2026-06-28T00:00:09.000Z" },
+          { id: "build", title: "运行构建", description: null, status: "in_progress", agent_name: "BuildAgent", sort_order: 5, created_at: "2026-06-28T00:00:05.000Z" },
+          { id: "planner", title: "生成计划", description: null, status: "todo", agent_name: "PlannerAgent", sort_order: 2, created_at: "2026-06-28T00:00:02.000Z" },
+          { id: "code-first", title: "实现页面", description: null, status: "todo", agent_name: "CodingAgent", sort_order: 3, created_at: "2026-06-28T00:00:03.000Z" },
+          { id: "architect", title: "生成架构", description: null, status: "done", agent_name: "ArchitectAgent", sort_order: 1, created_at: "2026-06-28T00:00:01.000Z" }
         ],
         "planning",
         null
       ).map((item) => `${item.displayStatus}:${item.task.id}`)
-    ).toEqual(["done:done-late", "in_progress:doing", "todo:todo-early", "todo:todo-late"]);
+    ).toEqual(["failed:product", "done:architect", "todo:planner", "todo:code-first", "done:code-second", "in_progress:build", "todo:review"]);
   });
 
   it("derives waiting, running, and completed planning agent states from event types", () => {

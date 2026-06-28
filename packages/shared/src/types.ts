@@ -33,7 +33,7 @@ export interface HarnessArtifact {
 export interface GeneratedTask {
   title: string;
   description: string;
-  status: "todo" | "in_progress" | "done";
+  status: "todo" | "in_progress" | "done" | "failed";
   sortOrder: number;
   agentName: AgentName;
 }

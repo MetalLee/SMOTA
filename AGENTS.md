@@ -27,7 +27,9 @@ PlannerAgent 接入真实 LLM。它根据用户输入、`PROJECT_BRIEF.md` 和 `
 
 通过 Vercel Sandbox 调用 OpenCode CLI 执行代码修改。它在 `/workspace` 内工作，并使用 Harness 文件作为本地项目上下文。
 
-CodingAgent 保持当前功能，不直接接入平台 LLMProvider。它在 Sandbox 内通过 OpenCode CLI 阅读 `AGENTS.md`、`PROJECT_BRIEF.md`、`ARCHITECTURE.md`、`CODEX_TASK_RULES.md` 和 `ROADMAP.md`，按照计划编写代码。在中文环境下，生成应用的用户可见文案、注释说明和报告性内容优先使用简体中文；代码标识符和技术 API 可保留英文。
+CodingAgent 保持当前功能，不直接接入平台 LLMProvider。它在 Sandbox 内通过 OpenCode CLI 阅读 `AGENTS.md`、`PROJECT_BRIEF.md`、`ARCHITECTURE.md`、`CODEX_TASK_RULES.md` 和 `ROADMAP.md`，并只接收数据库 `tasks` 表中分配给 CodingAgent 的任务 ID 作为唯一任务清单执行代码修改；不得在 OpenCode 内重新拆分一套独立进度任务。在中文环境下，生成应用的用户可见文案、注释说明和报告性内容优先使用简体中文；代码标识符和技术 API 可保留英文。
+
+CodingAgent 每开始某个 CodingAgent 任务前，必须通过平台提供的 HTTP API 将该任务状态改为 `in_progress`；任务完成后改为 `done`；无法完成时改为 `failed` 并说明原因。CodingAgent 任务状态只更新 `tasks.status`，不绑定也不修改 `agent_runs.status`；非 CodingAgent 任务继续按分配的 Agent 状态展示。
 
 ### BuildAgent
 
@@ -60,14 +62,15 @@ ReviewerAgent 接入真实 LLM。它读取 build result、run events、文件索
 9. 平台将 Harness 文件写入 Sandbox `/workspace`。
 10. 平台在 Sandbox 内初始化 Vite React TypeScript 应用。
 11. CodingAgent 在 Sandbox 内执行 OpenCode CLI。
-12. BuildAgent 在 Sandbox 内执行 `pnpm install`。
-13. BuildAgent 在 Sandbox 内执行 `pnpm build`。
-14. 如果构建失败，BuildAgent 触发一次自动修复。
-15. 平台扫描 Sandbox 文件树，并将文件索引写入 Supabase。
-16. 平台启动 dev server，并生成 preview URL。
+12. CodingAgent 按 `tasks` 表中分配给 CodingAgent 的任务 ID 执行，并通过 HTTP 请求回写这些任务状态。
+13. BuildAgent 在 Sandbox 内执行 `pnpm install`。
+14. BuildAgent 在 Sandbox 内执行 `pnpm build`。
+15. 如果构建失败，BuildAgent 触发一次自动修复。
+16. 平台扫描 Sandbox 文件树，并将文件索引写入 Supabase。
+17. 平台启动 dev server，并生成 preview URL。
    - 如果持久化 Sandbox 后续被访问并恢复，但 `5173` 端口没有监听，项目详情页预览 tab 会在每个 preview URL 上最多自动触发一次服务端恢复检查，手动刷新可强制重试；服务端会在单个 Sandbox 命令内重启 Vite dev server 并等待端口就绪。
-17. ReviewerAgent 生成中文质量检视报告。
-18. Web 工作台展示概览、应用预览器、编辑器、终端和文件；文件 tab 按目录层级以树状表格展示。
+18. ReviewerAgent 生成中文质量检视报告。
+19. Web 工作台展示概览、应用预览器、编辑器、终端和文件；左侧计划任务按 ProductAgent、ArchitectAgent、PlannerAgent、CodingAgent、BuildAgent、ReviewerAgent 顺序分组展示，同一 Agent 下保持原任务顺序；文件 tab 按目录层级以树状表格展示。
 
 ## 继续开发流程
 

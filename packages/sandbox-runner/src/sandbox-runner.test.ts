@@ -75,13 +75,17 @@ describe("sandbox runner helpers", () => {
     expect(
       buildSandboxCodingAgentEnvironment({
         DEEPSEEK_API_KEY: "deepseek-key",
-        SUPABASE_SERVICE_ROLE_KEY: "must-not-leak"
+        SUPABASE_SERVICE_ROLE_KEY: "must-not-leak",
+        SMOTA_TASK_UPDATE_URL: "https://smota.example/api/runs/run-1",
+        SMOTA_TASK_UPDATE_TOKEN: "task-token"
       })
     ).toEqual({
       OPENAI_API_KEY: "deepseek-key",
       OPENAI_BASE_URL: "https://api.deepseek.com",
       OPENAI_MODEL: "deepseek-v4-pro",
-      DEEPSEEK_API_KEY: "deepseek-key"
+      DEEPSEEK_API_KEY: "deepseek-key",
+      SMOTA_TASK_UPDATE_URL: "https://smota.example/api/runs/run-1",
+      SMOTA_TASK_UPDATE_TOKEN: "task-token"
     });
   });
 
@@ -118,17 +122,27 @@ describe("sandbox runner helpers", () => {
     const prompt = buildCodingAgentPrompt({
       projectPrompt: "Build a booking dashboard",
       tasks: [
-        { title: "Create shell", description: "Add the primary layout" },
-        { title: "Wire state", description: null }
+        { id: "task-shell", title: "Create shell", description: "Add the primary layout", status: "todo", agentName: "CodingAgent" },
+        { id: "task-state", title: "Wire state", description: null, status: "todo", agentName: "CodingAgent" },
+        { id: "task-build", title: "Run production build", description: "BuildAgent validates output", status: "todo", agentName: "BuildAgent" }
       ],
       artifacts: [
         { path: "PROJECT_BRIEF.md", content: "# Brief\nUse Vite." },
         { path: "AGENTS.md", content: "# Agents\nUse CodingAgent." }
-      ]
+      ],
+      taskUpdateUrl: "https://smota.example/api/runs/run-1",
+      taskUpdateTokenEnvName: "SMOTA_TASK_UPDATE_TOKEN"
     });
 
     expect(prompt).toContain("Build a booking dashboard");
     expect(prompt).toContain("Create shell");
+    expect(prompt).toContain("Task ID: task-shell");
+    expect(prompt).not.toContain("Run production build");
+    expect(prompt).not.toContain("Task ID: task-build");
+    expect(prompt).toContain("Approved tasks are the only task list");
+    expect(prompt).toContain("curl -fsS -X POST");
+    expect(prompt).toContain("https://smota.example/api/runs/run-1/tasks/<taskId>/status");
+    expect(prompt).toContain("SMOTA_TASK_UPDATE_TOKEN");
     expect(prompt).toContain("PROJECT_BRIEF.md");
     expect(prompt).toContain("All generated application code must stay inside /workspace.");
     expect(prompt).toContain("简体中文");
@@ -145,14 +159,23 @@ describe("sandbox runner helpers", () => {
       originalProjectPrompt: "克隆来的销售看板",
       changePrompt: "增加负责人筛选器",
       sourceKind: "cloned_workspace",
-      tasks: [{ title: "实现筛选器", description: "保持现有风格" }],
+      tasks: [
+        { id: "task-filter", title: "实现筛选器", description: "保持现有风格", status: "todo", agentName: "CodingAgent" },
+        { id: "task-review", title: "生成质量报告", description: "ReviewerAgent 总结结果", status: "todo", agentName: "ReviewerAgent" }
+      ],
       artifacts: [{ path: "ROADMAP.md", content: "# 路线图\n增量修改" }],
-      workspaceFiles: ["package.json", "src/App.tsx"]
+      workspaceFiles: ["package.json", "src/App.tsx"],
+      taskUpdateUrl: "https://smota.example/api/runs/run-2",
+      taskUpdateTokenEnvName: "SMOTA_TASK_UPDATE_TOKEN"
     });
 
     expect(prompt).toContain("当前 /workspace 已经存在项目文件");
     expect(prompt).toContain("克隆来的已有应用");
     expect(prompt).toContain("增加负责人筛选器");
+    expect(prompt).toContain("Task ID: task-filter");
+    expect(prompt).not.toContain("生成质量报告");
+    expect(prompt).not.toContain("Task ID: task-review");
+    expect(prompt).toContain("Approved tasks are the only task list");
     expect(prompt).toContain("不要重新初始化、重建或覆盖整个项目");
     expect(prompt).toContain("src/App.tsx");
   });
