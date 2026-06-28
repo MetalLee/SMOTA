@@ -20,6 +20,6 @@ export function canRevisePendingPlan(runStatus: string, currentStep: string | nu
   return runStatus === "pending_approval" && currentStep === "plan_ready";
 }
 
-export function shouldDisablePlanApproval(revisionPrompt: string, submitting = false): boolean {
-  return submitting || revisionPrompt.trim().length > 0;
+export function shouldDisablePlanApproval(revisionPrompt: string, revisionSubmitting = false, approvalSubmitting = false): boolean {
+  return revisionSubmitting || approvalSubmitting || revisionPrompt.trim().length > 0;
 }

@@ -3,7 +3,7 @@ import { runVercelSandboxWorkflow } from "@smota/sandbox-runner";
 import { createClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
-export const maxDuration = 300;
+export const maxDuration = 800;
 export const dynamic = "force-dynamic";
 
 export async function POST(_request: Request, { params }: { params: Promise<{ runId: string }> }) {

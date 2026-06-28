@@ -30,7 +30,6 @@ import {
 } from "lucide-react";
 import { approvePlanAction, continueProjectAction, revisePlanAction, updateProjectShareAction } from "@/app/actions/projects";
 import { FileTreeTable } from "@/components/file-tree-table";
-import { PendingButton } from "@/components/pending-button";
 import { LoadingOverlay, RouteLoadingLink, WorkspaceLoadingLink } from "@/components/route-loading";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -128,6 +127,7 @@ export function WorkbenchClient({
   const [planningStarted, setPlanningStarted] = useState(false);
   const [sandboxAutoStarted, setSandboxAutoStarted] = useState(false);
   const [cloneAutoStarted, setCloneAutoStarted] = useState(false);
+  const [approvalSubmitting, setApprovalSubmitting] = useState(false);
   const [continuationSubmitting, setContinuationSubmitting] = useState(false);
   const [planRevisionSubmitting, setPlanRevisionSubmitting] = useState(false);
   const [previewHealthy, setPreviewHealthy] = useState(false);
@@ -252,7 +252,14 @@ export function WorkbenchClient({
     setPlanningStarted(false);
     setSandboxAutoStarted(false);
     setCloneAutoStarted(false);
+    setApprovalSubmitting(false);
   }, [run.id]);
+
+  useEffect(() => {
+    if (!["draft", "pending_approval"].includes(run.status)) {
+      setApprovalSubmitting(false);
+    }
+  }, [run.status]);
 
   useEffect(() => {
     setPreviewHealthy(false);
@@ -328,6 +335,23 @@ export function WorkbenchClient({
     await refreshWorkspace();
   }
 
+  async function approvePlan() {
+    if (approvalSubmitting || !["draft", "pending_approval"].includes(run.status)) return;
+    setApprovalSubmitting(true);
+    setActionError(null);
+    const formData = new FormData();
+    formData.set("projectId", project.id);
+    formData.set("runId", run.id);
+
+    try {
+      await approvePlanAction(formData);
+      await refreshWorkspace();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "批准计划失败。");
+      setApprovalSubmitting(false);
+    }
+  }
+
   async function refreshAll() {
     if (previewRefreshing) return;
     setPreviewRefreshing(true);
@@ -396,12 +420,14 @@ export function WorkbenchClient({
           events={events}
           controls={controls}
           loadingAction={loadingAction}
+          approvalSubmitting={approvalSubmitting}
           continuationSubmitting={continuationSubmitting}
           planRevisionSubmitting={planRevisionSubmitting}
           sandboxAutoStartPending={sandboxAutoStartPending}
           actionError={actionError}
           canContinue={canStartContinuationRun(run.status)}
           canRevisePlan={canRevisePendingPlan(run.status, run.current_step)}
+          onApprove={approvePlan}
           onContinue={continueProject}
           onRevisePlan={revisePlan}
           onStart={startSandbox}
@@ -623,12 +649,14 @@ function AgentPanel({
   events,
   controls,
   loadingAction,
+  approvalSubmitting,
   continuationSubmitting,
   planRevisionSubmitting,
   sandboxAutoStartPending,
   actionError,
   canContinue,
   canRevisePlan,
+  onApprove,
   onContinue,
   onRevisePlan,
   onStart,
@@ -641,12 +669,14 @@ function AgentPanel({
   events: RunEventRow[];
   controls: ReturnType<typeof getRunControls>;
   loadingAction: "start" | "stop" | null;
+  approvalSubmitting: boolean;
   continuationSubmitting: boolean;
   planRevisionSubmitting: boolean;
   sandboxAutoStartPending: boolean;
   actionError: string | null;
   canContinue: boolean;
   canRevisePlan: boolean;
+  onApprove: () => Promise<void>;
   onContinue: (prompt: string) => Promise<void>;
   onRevisePlan: (prompt: string) => Promise<void>;
   onStart: () => Promise<void>;
@@ -677,7 +707,7 @@ function AgentPanel({
   const promptEnabled = canContinue || canRevisePlan;
   const promptPlaceholder = canRevisePlan ? "描述你想如何修改计划" : "继续描述你想修改什么";
   const submitLabel = canRevisePlan ? "提交计划修改" : "发起继续开发";
-  const approveDisabled = canRevisePlan && shouldDisablePlanApproval(continuationPrompt, planRevisionSubmitting);
+  const approveDisabled = shouldDisablePlanApproval(continuationPrompt, planRevisionSubmitting, approvalSubmitting);
 
   return (
     <div className={layoutClasses.agentPanel}>
@@ -784,12 +814,17 @@ function AgentPanel({
             </button>
           </form>
           {controls.primaryAction === "approve" ? (
-            <form action={approvePlanAction}>
-              <input type="hidden" name="projectId" value={project.id} />
-              <input type="hidden" name="runId" value={run.id} />
-              <PendingButton type="submit" disabled={approveDisabled} className="w-full" pendingLabel="批准中">
-                批准计划
-              </PendingButton>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (approveDisabled) return;
+                void onApprove();
+              }}
+            >
+              <Button type="submit" disabled={approveDisabled} className="w-full">
+                {approvalSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                {approvalSubmitting ? "批准中" : "批准计划"}
+              </Button>
             </form>
           ) : null}
           {controls.primaryAction === "start" ? (

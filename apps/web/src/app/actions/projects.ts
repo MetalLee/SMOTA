@@ -108,7 +108,7 @@ export async function approvePlanAction(formData: FormData) {
   const runId = String(formData.get("runId") ?? "");
   const { supabase, user } = await requireUser();
 
-  const { error: updateError } = await supabase
+  const { data: approvedRuns, error: updateError } = await supabase
     .from("agent_runs")
     .update({
       status: "approved",
@@ -117,10 +117,17 @@ export async function approvePlanAction(formData: FormData) {
     })
     .eq("id", runId)
     .eq("project_id", projectId)
-    .eq("owner_id", user.id);
+    .eq("owner_id", user.id)
+    .in("status", ["draft", "pending_approval"])
+    .select("id");
 
   if (updateError) {
     throw new Error(updateError.message);
+  }
+
+  if (!approvedRuns?.length) {
+    revalidatePath(`/projects/${projectId}`);
+    return;
   }
 
   const { error: eventError } = await supabase.from("run_events").insert({

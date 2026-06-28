@@ -47,5 +47,6 @@ describe("project planning helpers", () => {
     expect(shouldDisablePlanApproval("   ")).toBe(false);
     expect(shouldDisablePlanApproval("请改成深色模式")).toBe(true);
     expect(shouldDisablePlanApproval("", true)).toBe(true);
+    expect(shouldDisablePlanApproval("", false, true)).toBe(true);
   });
 });
