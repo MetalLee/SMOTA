@@ -11,6 +11,7 @@ import {
   buildSandboxPreviewScreenshotCommand,
   getSandboxPreviewScreenshotPath,
   getPreviewScreenshotBucket,
+  getPreviewScreenshotCommandTimeoutMs,
   getPreviewScreenshotConfig,
   shouldCapturePreviewScreenshot,
   uploadPreviewScreenshot
@@ -212,7 +213,9 @@ export function buildRealtimeSandboxPhasePlan() {
   return {
     fileScanPhases: ["harness_written", "init_vite", "preview_ready", "opencode_run", "install_after_opencode", "build"],
     previewStartsBeforeOpenCode: true,
-    screenshotPhase: "after_build"
+    screenshotPhase: "after_build",
+    reviewSteps: ["review_screenshot", "review_report"],
+    runSuccessPhase: "after_review_report"
   };
 }
 
@@ -541,13 +544,13 @@ export async function runVercelSandboxWorkflow(runId: string, options: WorkflowO
     await updateRunStatus(supabase, context, { build_status: "succeeded", current_step: "indexing_files" });
     await scanWorkspaceFiles({ sandbox, supabase, context, phase: "build" });
 
-    await updateRunStatus(supabase, context, { status: "succeeded", current_step: "succeeded", sandbox_preview_url: previewUrl, sandbox_status: "previewing" });
     await supabase.from("sandbox_runs").update({ status: "previewing", preview_url: previewUrl }).eq("run_id", run.id);
     const screenshotBucket = getPreviewScreenshotBucket(env);
     let previewImageUrl: string | null = null;
 
     if (shouldCapturePreviewScreenshot({ bucket: screenshotBucket, previewUrl })) {
       try {
+        await updateRunStatus(supabase, context, { current_step: "review_screenshot", sandbox_status: "previewing" });
         await insertRunEvent(supabase, context, { eventType: "review.screenshot.started", step: "review_screenshot", message: "Capturing preview screenshot for project card." });
         const screenshotConfig = getPreviewScreenshotConfig(env);
         const screenshotPath = getSandboxPreviewScreenshotPath();
@@ -559,7 +562,7 @@ export async function runVercelSandboxWorkflow(runId: string, options: WorkflowO
           cmd: "bash",
           args: ["-lc", buildSandboxPreviewScreenshotCommand({ previewUrl, config: screenshotConfig, outputPath: screenshotPath })],
           cwd: WORKSPACE_DIR,
-          timeoutMs: screenshotConfig.timeoutMs + screenshotConfig.settleMs + 5 * 60 * 1000
+          timeoutMs: getPreviewScreenshotCommandTimeoutMs(env, screenshotConfig)
         });
         if (screenshotCommand.exitCode !== 0) {
           throw new Error(await commandOutput(screenshotCommand));
@@ -593,6 +596,7 @@ export async function runVercelSandboxWorkflow(runId: string, options: WorkflowO
         });
       }
     }
+    await updateRunStatus(supabase, context, { current_step: "review_report", sandbox_status: "previewing" });
     const [{ data: reviewEvents }, { data: reviewFiles }] = await Promise.all([
       supabase
         .from("run_events")
@@ -648,6 +652,8 @@ export async function runVercelSandboxWorkflow(runId: string, options: WorkflowO
     });
     await insertRunEvent(supabase, context, { eventType: "artifact.created", step: "review_report", message: "已生成质量检视报告。" });
     await insertRunEvent(supabase, context, { eventType: "preview.ready", step: "preview", message: `Preview is ready: ${previewUrl}`, payload: { previewUrl } });
+    await updateRunStatus(supabase, context, { status: "succeeded", current_step: "succeeded", sandbox_preview_url: previewUrl, sandbox_status: "previewing" });
+    await supabase.from("sandbox_runs").update({ status: "previewing", preview_url: previewUrl }).eq("run_id", run.id);
     await insertRunEvent(supabase, context, { eventType: "run.status", step: "succeeded", message: "Run succeeded." });
 
     return { status: "succeeded", previewUrl };

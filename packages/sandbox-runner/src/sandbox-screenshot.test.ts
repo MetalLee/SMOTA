@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildPreviewScreenshotObjectPath,
   buildSandboxPreviewScreenshotCommand,
+  getPreviewScreenshotCommandTimeoutMs,
   getSandboxPreviewScreenshotPath,
   getPreviewScreenshotBucket,
   getPreviewScreenshotConfig,
@@ -40,6 +41,17 @@ describe("sandbox preview screenshots", () => {
 
   it("uses a stable Sandbox-local screenshot path", () => {
     expect(getSandboxPreviewScreenshotPath()).toBe("/tmp/smota-preview.png");
+  });
+
+  it("caps optional screenshot command time below the Sandbox start API max duration", () => {
+    const config = {
+      viewport: { width: 1280, height: 720 },
+      timeoutMs: 30000,
+      settleMs: 1500
+    };
+
+    expect(getPreviewScreenshotCommandTimeoutMs({}, config)).toBe(120000);
+    expect(getPreviewScreenshotCommandTimeoutMs({ PREVIEW_SCREENSHOT_COMMAND_TIMEOUT_MS: "90000" }, config)).toBe(90000);
   });
 
   it("builds a Sandbox command that installs Chromium and captures the preview after build", () => {

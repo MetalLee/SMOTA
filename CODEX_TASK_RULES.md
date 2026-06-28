@@ -47,6 +47,7 @@
 - 继续开发 Run 必须优先复用当前项目已有 Sandbox 文件；克隆项目即使没有语义上的 parent run，只要存在克隆写入的 workspace 文件索引，也必须按增量修改处理。
 - 复用已有 workspace 时不得重新执行 Vite 初始化，不得覆盖 `/workspace` 中已有应用骨架。
 - Sandbox 恢复后若预览端口未监听，服务端必须通过封装层探测并重启 Vite dev server；预览恢复检查必须有并发保护，且每个 preview URL 最多自动触发一次，避免常规轮询持续创建 Sandbox 命令；健康判断必须以 `127.0.0.1:5173` HTTP 可访问为准，不能用 `pgrep` 之类的进程匹配代替；客户端不能直接调用 Sandbox SDK。
+- 预览截图属于可选 Review 增强，不得在截图仍运行时提前把 AgentRun 标记为 `succeeded`；截图超时或失败只能记录 review 事件，不能覆盖已成功的 build 状态。
 - 如果构建失败，MVP 只能自动修复一次。
 
 ## UI 规则

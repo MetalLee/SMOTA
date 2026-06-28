@@ -36,6 +36,15 @@ export function getPreviewScreenshotConfig(env: Record<string, string | undefine
   };
 }
 
+export function getPreviewScreenshotCommandTimeoutMs(
+  env: Record<string, string | undefined>,
+  config: PreviewScreenshotConfig
+): number {
+  const requestedTimeoutMs = config.timeoutMs + Math.max(0, config.settleMs) + 5 * 60 * 1000;
+  const capMs = Number(env.PREVIEW_SCREENSHOT_COMMAND_TIMEOUT_MS ?? 120000);
+  return Math.min(requestedTimeoutMs, Number.isFinite(capMs) && capMs > 0 ? capMs : 120000);
+}
+
 export function shouldCapturePreviewScreenshot({ bucket, previewUrl }: { bucket: string; previewUrl: string }) {
   return Boolean(bucket.trim() && previewUrl.trim());
 }
