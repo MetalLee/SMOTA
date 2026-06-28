@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildCloneCommandFailureMessage,
+  buildCloneDependencyInstallCommand,
   buildCloneProjectName,
   buildCloneStepFailureMessage,
   buildCloneWorkspaceArchiveCommand,
@@ -35,6 +36,15 @@ describe("project clone helpers", () => {
 
   it("starts clone workspace bootstrap commands outside /workspace", () => {
     expect(getCloneWorkspaceBootstrapCwd()).toBe("/");
+  });
+
+  it("keeps clone dependency installation separate from the long-running preview server", () => {
+    const command = buildCloneDependencyInstallCommand();
+
+    expect(command).toContain("pnpm install");
+    expect(command).not.toContain("pnpm dev");
+    expect(command).not.toContain("nohup");
+    expect(command).not.toMatch(/(?:^|\s)&(?:\s|$)/);
   });
 
   it("copies the latest source artifacts into the cloned run", () => {

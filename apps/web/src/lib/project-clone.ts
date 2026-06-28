@@ -33,6 +33,10 @@ export function buildExtractCloneWorkspaceArchiveCommand(archivePath: string) {
   return ["set -e", "mkdir -p /workspace", `tar -xzf ${shellQuote(archivePath)} -C /workspace`].join("\n");
 }
 
+export function buildCloneDependencyInstallCommand() {
+  return ["corepack enable >/dev/null 2>&1 || true", "pnpm install"].join(" && ");
+}
+
 export function getCloneWorkspaceBootstrapCwd() {
   return "/";
 }
