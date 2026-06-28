@@ -62,6 +62,9 @@ export interface ProjectRow {
   app_type: AppType | string;
   mode: AppMode | string;
   status: string;
+  is_shared_to_discovery?: boolean;
+  shared_at?: string | null;
+  source_project_id?: string | null;
   created_at: string;
   updated_at: string;
 }

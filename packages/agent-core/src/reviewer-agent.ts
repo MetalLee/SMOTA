@@ -1,4 +1,5 @@
 import { createOpenAiCompatibleLlmProvider, type LlmProvider } from "./llm";
+import { SIMPLIFIED_CHINESE_OUTPUT_INSTRUCTION, withSimplifiedChineseOutputInstruction } from "./output-language";
 import { parseJsonObjectFromText } from "./orchestrator";
 
 export interface ReviewRunEventInput {
@@ -24,6 +25,8 @@ export function createReviewerAgent(options: { llm?: LlmProvider } = {}) {
       onReasoning?: (delta: string) => void;
     }): Promise<string> {
       const prompt = [
+        SIMPLIFIED_CHINESE_OUTPUT_INSTRUCTION,
+        "",
         "请根据以下信息生成 REVIEW_REPORT.md。",
         "",
         `Build result:\n${input.buildResult}`,
@@ -39,11 +42,11 @@ export function createReviewerAgent(options: { llm?: LlmProvider } = {}) {
         "Known issues:",
         input.knownIssues.length > 0 ? input.knownIssues.map((issue) => `- ${issue}`).join("\n") : "- 暂无已知问题",
         "",
-        '只输出 JSON：{"report":"# Review Report\\n..."}'
+        '只输出 JSON：{"report":"# 质量检视报告\\n..."}'
       ].join("\n");
 
       const result = await llm.generateText({
-        system: "你是 SMOTA 的 ReviewerAgent。输出面向用户的简洁质量检视报告。只输出 JSON。",
+        system: withSimplifiedChineseOutputInstruction("你是 SMOTA 的 ReviewerAgent。输出面向用户的简洁质量检视报告。只输出 JSON。"),
         prompt,
         responseFormat: "json_object",
         stream: true,
@@ -56,16 +59,16 @@ export function createReviewerAgent(options: { llm?: LlmProvider } = {}) {
 }
 
 export function fallbackReviewReport(buildResult: string, previewUrl?: string | null): string {
-  return `# Review Report
+  return `# 质量检视报告
 
-## Summary
+## 构建结果
 
 ${buildResult}
 
-${previewUrl ? `Preview: ${previewUrl}` : "Preview: N/A"}
+${previewUrl ? `预览地址：${previewUrl}` : "预览地址：暂无"}
 
-## Known Issues
+## 已知问题
 
-- ReviewerAgent LLM report was unavailable, so SMOTA generated this deterministic fallback report.
+- ReviewerAgent 暂时无法调用真实 LLM，因此 SMOTA 生成了这份确定性 fallback 报告。
 `;
 }

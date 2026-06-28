@@ -3,7 +3,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
-import { Copy, ExternalLink, Globe2, Loader2, MoreHorizontal, Trash2 } from "lucide-react";
+import { Copy, ExternalLink, Eye, Globe2, Loader2, MoreHorizontal, Trash2 } from "lucide-react";
 import { deleteProjectAction } from "@/app/actions/projects";
 import { RouteLoadingLink } from "@/components/route-loading";
 import { Button } from "@/components/ui/button";
@@ -40,6 +40,18 @@ function PreviewPlaceholder() {
   );
 }
 
+function CreatorAvatar({ name, src }: { name: string; src?: string | null }) {
+  if (src) {
+    return <img className="h-12 w-12 rounded-full object-cover" src={src} alt={`${name} 头像`} />;
+  }
+
+  return (
+    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-slate-700 text-lg font-bold text-white">
+      {name.slice(0, 1).toUpperCase()}
+    </div>
+  );
+}
+
 export function MyProjectCard({ project }: { project: MyProjectCardModel }) {
   const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -50,6 +62,9 @@ export function MyProjectCard({ project }: { project: MyProjectCardModel }) {
   const menuItems = useMemo(() => getProjectCardMenuItems(), []);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const menuButtonRef = useRef<HTMLButtonElement | null>(null);
+  const isSharedCard = !project.showMenu;
+  const creatorName = project.creatorName?.trim() || "SMOTA 创作者";
+  const viewCount = project.viewCount ?? 0;
 
   useEffect(() => {
     if (!menuOpen) {
@@ -116,7 +131,7 @@ export function MyProjectCard({ project }: { project: MyProjectCardModel }) {
     <article className={getProjectCardShellClass(menuOpen)}>
       <RouteLoadingLink href={project.href} aria-label={`打开项目 ${project.name}`}>
         {project.previewImageUrl ? (
-          <div className="h-52 overflow-hidden rounded-t-lg border-b border-slate-200 bg-slate-100">
+          <div className="aspect-video overflow-hidden rounded-t-lg border-b border-slate-200 bg-slate-100">
             <img className="h-full w-full object-cover" src={project.previewImageUrl} alt={`${project.name} 预览图`} />
           </div>
         ) : (
@@ -124,35 +139,58 @@ export function MyProjectCard({ project }: { project: MyProjectCardModel }) {
         )}
       </RouteLoadingLink>
 
-      <div className="relative min-h-28 p-5 pr-14">
-        {project.published ? (
+      <div className={cn("relative min-h-28 p-5", project.showMenu ? "pr-14" : "pr-5")}>
+        {project.showPublishedBadge && project.published ? (
           <div className={getPublishedBadgeClass()}>
             <Globe2 className="h-3.5 w-3.5" />
             已发布
           </div>
         ) : null}
 
-        <RouteLoadingLink href={project.href} className="block truncate text-base font-bold text-ink transition hover:text-primary">
-          {project.name}
-        </RouteLoadingLink>
-        <div className="mt-1 text-sm text-slate-500">{project.updatedDate}</div>
+        {isSharedCard ? (
+          <div className="flex items-center gap-4">
+            <CreatorAvatar name={creatorName} src={project.creatorAvatarUrl} />
+            <div className="min-w-0">
+              <RouteLoadingLink href={project.href} className="block truncate text-base font-bold text-ink transition hover:text-primary">
+                {project.name}
+              </RouteLoadingLink>
+              <div className="mt-2 flex items-center gap-2 text-sm text-slate-500">
+                <span className="truncate">{creatorName}</span>
+                <span className="text-slate-300">•</span>
+                <span className="inline-flex items-center gap-1">
+                  <Eye className="h-4 w-4" />
+                  {viewCount}
+                </span>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <>
+            <RouteLoadingLink href={project.href} className="block truncate text-base font-bold text-ink transition hover:text-primary">
+              {project.name}
+            </RouteLoadingLink>
+            <div className="mt-1 text-sm text-slate-500">{project.updatedDate}</div>
+          </>
+        )}
 
-        <button
-          ref={menuButtonRef}
-          type="button"
-          aria-label={`${project.name} 项目操作`}
-          aria-expanded={menuOpen}
-          className="absolute bottom-5 right-4 flex h-9 w-9 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-100 hover:text-ink"
-          onClick={() => {
-            setMenuOpen((open) => !open);
-            setCopyState("idle");
-            setMenuPlacement("below");
-          }}
-        >
-          <MoreHorizontal className="h-5 w-5" />
-        </button>
+        {project.showMenu ? (
+          <button
+            ref={menuButtonRef}
+            type="button"
+            aria-label={`${project.name} 项目操作`}
+            aria-expanded={menuOpen}
+            className="absolute bottom-5 right-4 flex h-9 w-9 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-100 hover:text-ink"
+            onClick={() => {
+              setMenuOpen((open) => !open);
+              setCopyState("idle");
+              setMenuPlacement("below");
+            }}
+          >
+            <MoreHorizontal className="h-5 w-5" />
+          </button>
+        ) : null}
 
-        {menuOpen ? (
+        {project.showMenu && menuOpen ? (
           <div ref={menuRef} className={getProjectCardMenuClass(menuPlacement)}>
             {menuItems.map((item) => {
               if (item.action === "open") {

@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { createReviewerAgent, fallbackReviewReport } from "@smota/agent-core";
+import { SIMPLIFIED_CHINESE_OUTPUT_INSTRUCTION, createReviewerAgent, fallbackReviewReport } from "@smota/agent-core";
 import { buildSandboxName, buildSandboxRuntimeConfig, createSupabaseServiceClient, createVercelSandbox } from "./sandbox-client";
 import { commandOutput, runSandboxCommand, startDetachedSandboxCommand } from "./sandbox-commands";
 import { ensureWorkspace, scanWorkspaceFiles, writeHarnessArtifacts, WORKSPACE_DIR } from "./sandbox-files";
@@ -33,6 +33,7 @@ export function buildCodingAgentPrompt(input: {
 
   return [
     "You are the CodingAgent for SMOTA.",
+    SIMPLIFIED_CHINESE_OUTPUT_INSTRUCTION,
     "All generated application code must stay inside /workspace.",
     "Implement the approved MVP as a Vite React TypeScript application.",
     "Do not use a Local Runner and do not depend on generated-workspaces.",
@@ -469,7 +470,6 @@ export async function runVercelSandboxWorkflow(runId: string, options: WorkflowO
     let reviewReport = fallbackReviewReport("Build succeeded.", previewUrl);
 
     try {
-      const reasoningWrites: Array<Promise<void>> = [];
       reviewReport = await createReviewerAgent().generateReport({
         buildResult: `Build succeeded.\nPreview: ${previewUrl}`,
         runEvents: (reviewEvents ?? []).map((event: { event_type: string; message: string | null }) => ({
@@ -481,22 +481,8 @@ export async function runVercelSandboxWorkflow(runId: string, options: WorkflowO
           changeType: file.change_type
         })),
         knownIssues: [],
-        previewUrl,
-        onReasoning: (delta) => {
-          const message = delta.trim();
-          if (message) {
-            reasoningWrites.push(
-              insertRunEvent(supabase, context, {
-                eventType: "agent.reasoning",
-                agentName: "ReviewerAgent",
-                step: "review_report",
-                message
-              })
-            );
-          }
-        }
+        previewUrl
       });
-      await Promise.all(reasoningWrites);
     } catch (error) {
       const message = error instanceof Error ? error.message : "ReviewerAgent LLM report failed.";
       await insertRunEvent(supabase, context, {
@@ -514,11 +500,11 @@ export async function runVercelSandboxWorkflow(runId: string, options: WorkflowO
       project_id: context.projectId,
       run_id: context.runId,
       type: "review_report",
-      title: "Review Report",
+      title: "质量检视报告",
       path: "REVIEW_REPORT.md",
-      content: previewImageUrl ? `${reviewReport}\n\nPreview screenshot: ${previewImageUrl}\n` : reviewReport
+      content: previewImageUrl ? `${reviewReport}\n\n预览截图：${previewImageUrl}\n` : reviewReport
     });
-    await insertRunEvent(supabase, context, { eventType: "artifact.created", step: "review_report", message: "Created Review Report artifact." });
+    await insertRunEvent(supabase, context, { eventType: "artifact.created", step: "review_report", message: "已生成质量检视报告。" });
     await insertRunEvent(supabase, context, { eventType: "preview.ready", step: "preview", message: `Preview is ready: ${previewUrl}`, payload: { previewUrl } });
     await insertRunEvent(supabase, context, { eventType: "run.status", step: "succeeded", message: "Run succeeded." });
 

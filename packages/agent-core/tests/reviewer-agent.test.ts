@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createReviewerAgent } from "../src/reviewer-agent";
+import { createReviewerAgent, fallbackReviewReport } from "../src/reviewer-agent";
 import type { LlmProvider } from "../src/llm";
 
 describe("ReviewerAgent", () => {
@@ -7,6 +7,8 @@ describe("ReviewerAgent", () => {
     const llm: LlmProvider = {
       async generateText(input) {
         input.onReasoning?.("梳理构建结果和文件变化");
+        expect(input.system).toContain("简体中文");
+        expect(input.prompt).toContain("简体中文");
         expect(input.prompt).toContain("pnpm build succeeded");
         expect(input.prompt).toContain("src/App.tsx");
         return {
@@ -31,5 +33,14 @@ describe("ReviewerAgent", () => {
     expect(events).toEqual(["梳理构建结果和文件变化"]);
     expect(result).toContain("# Review Report");
     expect(result).toContain("构建成功");
+  });
+
+  it("uses a Chinese deterministic fallback report", () => {
+    const report = fallbackReviewReport("Build succeeded.", "https://preview.example.dev");
+
+    expect(report).toContain("# 质量检视报告");
+    expect(report).toContain("构建结果");
+    expect(report).not.toContain("Review Report");
+    expect(report).not.toContain("Known Issues");
   });
 });

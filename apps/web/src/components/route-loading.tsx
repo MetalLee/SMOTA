@@ -4,6 +4,7 @@ import Link, { type LinkProps } from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { createContext, useContext, useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
 import { Loader2 } from "lucide-react";
+import { getRouteLoadingOverlayScope, type RouteLoadingOverlayScope } from "@/lib/route-loading";
 import { getLoadingOverlayClasses } from "@/lib/workbench";
 
 type AnchorProps = Omit<React.AnchorHTMLAttributes<HTMLAnchorElement>, keyof LinkProps | "href">;
@@ -33,6 +34,7 @@ export function RouteLoadingProvider({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [loading, setLoading] = useState(false);
+  const [overlayScope, setOverlayScope] = useState<RouteLoadingOverlayScope>("global");
   const classes = getLoadingOverlayClasses();
   const routeKey = `${pathname}?${searchParams.toString()}`;
 
@@ -43,15 +45,20 @@ export function RouteLoadingProvider({ children }: { children: ReactNode }) {
   const value = useMemo<RouteLoadingContextValue>(
     () => ({
       loading,
-      startGlobalLoading: () => setLoading(true)
+      startGlobalLoading: () => {
+        setOverlayScope(getRouteLoadingOverlayScope(pathname));
+        setLoading(true);
+      }
     }),
-    [loading]
+    [loading, pathname]
   );
+
+  const overlayClassName = overlayScope === "main" ? classes.mainAreaOverlay : classes.globalOverlay;
 
   return (
     <RouteLoadingContext.Provider value={value}>
       {children}
-      {loading ? <LoadingOverlay className={classes.globalOverlay} label="正在加载" /> : null}
+      {loading ? <LoadingOverlay className={overlayClassName} label="正在加载" /> : null}
     </RouteLoadingContext.Provider>
   );
 }

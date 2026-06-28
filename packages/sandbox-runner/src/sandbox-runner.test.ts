@@ -4,9 +4,11 @@ import {
   buildGitSetupShellCommand,
   buildOpenCodeConfig,
   buildOpenCodeRunShellCommand,
+  buildPreviewServerEnsureShellCommand,
   buildRealtimeSandboxPhasePlan,
   buildViteDevServerArgs,
   buildVitePreviewConfigContent,
+  ensureSandboxPreviewServer,
   buildSandboxCodingAgentEnvironment,
   buildSandboxName,
   buildSandboxRuntimeConfig,
@@ -127,6 +129,7 @@ describe("sandbox runner helpers", () => {
     expect(prompt).toContain("Create shell");
     expect(prompt).toContain("PROJECT_BRIEF.md");
     expect(prompt).toContain("All generated application code must stay inside /workspace.");
+    expect(prompt).toContain("简体中文");
   });
 
   it("builds OpenCode run commands for the DeepSeek v4 Pro build agent", () => {
@@ -154,6 +157,101 @@ describe("sandbox runner helpers", () => {
 
   it("starts Vite dev with the SMOTA preview overlay config", () => {
     expect(buildViteDevServerArgs(5173)).toEqual(["dev", "--config", "smota.vite.config.ts", "--host", "0.0.0.0", "--port", "5173", "--strictPort"]);
+  });
+
+  it("treats only an HTTP response from the preview port as healthy", () => {
+    const command = buildPreviewServerEnsureShellCommand(5173);
+
+    expect(command).toContain("curl -fsS http://127.0.0.1:5173/");
+    expect(command).not.toContain("pgrep");
+  });
+
+  it("does not restart the preview server when the port is already listening", async () => {
+    const calls: unknown[] = [];
+    const insertedEvents: Array<Record<string, unknown>> = [];
+    const sandbox = {
+      async runCommand(params: unknown) {
+        calls.push(params);
+        return {
+          async wait() {
+            return { exitCode: 0 };
+          }
+        };
+      }
+    };
+    const supabase = {
+      from(table: string) {
+        return {
+          insert(payload: Record<string, unknown>) {
+            insertedEvents.push({ table, ...payload });
+            return Promise.resolve({ error: null });
+          }
+        };
+      }
+    };
+
+    await expect(
+      ensureSandboxPreviewServer({
+        sandbox: sandbox as never,
+        supabase: supabase as never,
+        context: { ownerId: "owner-1", projectId: "project-1", runId: "run-1" },
+        port: 5173
+      })
+    ).resolves.toEqual({ restarted: false, ready: true });
+    expect(calls).toHaveLength(1);
+    expect(insertedEvents.some((event) => event.event_type === "preview.ready")).toBe(false);
+  });
+
+  it("builds one preview recovery command that waits for Vite to listen", () => {
+    const command = buildPreviewServerEnsureShellCommand(5173);
+
+    expect(command).toContain("curl -fsS http://127.0.0.1:5173/");
+    expect(command).toContain("nohup pnpm 'dev' '--config' 'smota.vite.config.ts' '--host' '0.0.0.0' '--port' '5173' '--strictPort'");
+    expect(command).toContain("seq 1 60");
+    expect(command).toContain("exit 10");
+  });
+
+  it("restarts the preview server with a single ready-waiting Sandbox task when the sandbox resumed without a listener", async () => {
+    const calls: Array<{ cmd: string; args?: string[]; cwd?: string; detached?: true }> = [];
+    const insertedEvents: Array<Record<string, unknown>> = [];
+    const sandbox = {
+      async runCommand(params: { cmd: string; args?: string[]; cwd?: string; detached?: true }) {
+        calls.push(params);
+        return {
+          cmdId: "cmd-recover",
+          async wait() {
+            return { exitCode: 10 };
+          }
+        };
+      }
+    };
+    const supabase = {
+      from(table: string) {
+        return {
+          insert(payload: Record<string, unknown>) {
+            insertedEvents.push({ table, ...payload });
+            return Promise.resolve({ error: null });
+          }
+        };
+      }
+    };
+
+    await expect(
+      ensureSandboxPreviewServer({
+        sandbox: sandbox as never,
+        supabase: supabase as never,
+        context: { ownerId: "owner-1", projectId: "project-1", runId: "run-1" },
+        port: 5173
+      })
+    ).resolves.toEqual({ restarted: true, ready: true });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      cmd: "bash",
+      cwd: "/workspace"
+    });
+    expect(insertedEvents.some((event) => event.event_type === "sandbox.command.started" && event.step === "dev_server_recover")).toBe(true);
+    expect(insertedEvents.some((event) => event.event_type === "sandbox.command.finished" && event.step === "dev_server_recover")).toBe(true);
+    expect(insertedEvents.some((event) => event.event_type === "preview.ready" && event.step === "preview_recovered")).toBe(true);
   });
 
   it("plans realtime file scans around early preview startup", () => {

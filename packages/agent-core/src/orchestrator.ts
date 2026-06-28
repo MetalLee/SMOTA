@@ -1,5 +1,6 @@
 import type { GeneratedRunEvent, GeneratedTask, HarnessArtifact, ProjectCreationInput } from "@smota/shared";
 import { createOpenAiCompatibleLlmProvider, type LlmProvider } from "./llm";
+import { SIMPLIFIED_CHINESE_OUTPUT_INSTRUCTION, withSimplifiedChineseOutputInstruction } from "./output-language";
 
 type AgentStep = "product-brief" | "architecture" | "roadmap";
 
@@ -41,6 +42,12 @@ export function parseJsonObjectFromText(text: string): Record<string, unknown> {
   return JSON.parse(jsonText) as Record<string, unknown>;
 }
 
+export function stripOuterMarkdownFence(text: string): string {
+  const trimmed = text.trim();
+  const fenced = trimmed.match(/^```(?:markdown|md)?[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*$/i);
+  return (fenced?.[1] ?? trimmed).trim();
+}
+
 function normalizeTask(task: Partial<GeneratedTask>, index: number): GeneratedTask {
   return {
     title: String(task.title ?? `任务 ${index + 1}`),
@@ -50,12 +57,19 @@ function normalizeTask(task: Partial<GeneratedTask>, index: number): GeneratedTa
   };
 }
 
+function normalizeTaskBatch(tasks: Partial<GeneratedTask>[], startOrder: number): GeneratedTask[] {
+  return tasks.map((task, index) => ({
+    ...normalizeTask(task, index),
+    sortOrder: startOrder + index
+  }));
+}
+
 function artifact(title: string, path: HarnessArtifact["path"], content: string): HarnessArtifact {
   return {
     type: "harness",
     title,
     path,
-    content: content.trim()
+    content: stripOuterMarkdownFence(content)
   };
 }
 
@@ -84,26 +98,20 @@ async function generateJson<T>(input: {
   callbacks?: AgentOrchestratorCallbacks;
 }): Promise<T> {
   await recordEvent(input.events, input.callbacks, createEvent(input.agentName, "agent.started", input.step, `${input.agentName} started.`));
-  const pendingReasoningEvents: Array<Promise<void>> = [];
   const result = await input.llm.generateText({
     system: input.system,
     prompt: input.prompt,
     responseFormat: "json_object",
-    stream: true,
-    onReasoning: (delta) => {
-      const message = delta.trim();
-      if (message) {
-        pendingReasoningEvents.push(recordEvent(input.events, input.callbacks, createEvent(input.agentName, "agent.reasoning", input.step, message)));
-      }
-    }
+    stream: true
   });
-  await Promise.all(pendingReasoningEvents);
   await recordEvent(input.events, input.callbacks, createEvent(input.agentName, "agent.completed", input.step, `${input.agentName} completed.`));
   return parseJsonObjectFromText(result.content) as T;
 }
 
 function productPrompt(input: ProjectCreationInput): string {
   return [
+    SIMPLIFIED_CHINESE_OUTPUT_INSTRUCTION,
+    "",
     `用户需求：${input.prompt}`,
     `应用类型：${input.appType}`,
     `模式：${input.mode}`,
@@ -119,6 +127,8 @@ function productPrompt(input: ProjectCreationInput): string {
 
 function architectPrompt(input: ProjectCreationInput, projectBrief: string): string {
   return [
+    SIMPLIFIED_CHINESE_OUTPUT_INSTRUCTION,
+    "",
     `用户需求：${input.prompt}`,
     "",
     "PROJECT_BRIEF.md:",
@@ -134,6 +144,8 @@ function architectPrompt(input: ProjectCreationInput, projectBrief: string): str
 
 function plannerPrompt(input: ProjectCreationInput, projectBrief: string, architecture: string): string {
   return [
+    SIMPLIFIED_CHINESE_OUTPUT_INSTRUCTION,
+    "",
     `用户需求：${input.prompt}`,
     "",
     "PROJECT_BRIEF.md:",
@@ -164,7 +176,7 @@ export function createAgentOrchestrator(options: { llm?: LlmProvider } = {}) {
         llm,
         agentName: "ProductAgent",
         step: "product-brief",
-        system: "你是 SMOTA 的 ProductAgent。只输出 JSON，不要输出解释。",
+        system: withSimplifiedChineseOutputInstruction("你是 SMOTA 的 ProductAgent。只输出 JSON，不要输出解释。"),
         prompt: productPrompt(input),
         events,
         callbacks
@@ -173,7 +185,7 @@ export function createAgentOrchestrator(options: { llm?: LlmProvider } = {}) {
       const productArtifact = artifact("Project Brief", "PROJECT_BRIEF.md", product.projectBrief);
       artifacts.push(productArtifact);
       await callbacks?.onArtifact?.(productArtifact);
-      const productTasks = (product.tasks ?? []).map(normalizeTask);
+      const productTasks = normalizeTaskBatch(product.tasks ?? [], 1);
       tasks.push(...productTasks);
       if (productTasks.length) {
         await callbacks?.onTasks?.(productTasks);
@@ -183,7 +195,7 @@ export function createAgentOrchestrator(options: { llm?: LlmProvider } = {}) {
         llm,
         agentName: "ArchitectAgent",
         step: "architecture",
-        system: "你是 SMOTA 的 ArchitectAgent。只输出 JSON，不要输出解释。",
+        system: withSimplifiedChineseOutputInstruction("你是 SMOTA 的 ArchitectAgent。只输出 JSON，不要输出解释。"),
         prompt: architectPrompt(input, product.projectBrief),
         events,
         callbacks
@@ -198,7 +210,7 @@ export function createAgentOrchestrator(options: { llm?: LlmProvider } = {}) {
         llm,
         agentName: "PlannerAgent",
         step: "roadmap",
-        system: "你是 SMOTA 的 PlannerAgent。只输出 JSON，不要输出解释。",
+        system: withSimplifiedChineseOutputInstruction("你是 SMOTA 的 PlannerAgent。只输出 JSON，不要输出解释。"),
         prompt: plannerPrompt(input, product.projectBrief, architect.architecture),
         events,
         callbacks
@@ -208,7 +220,7 @@ export function createAgentOrchestrator(options: { llm?: LlmProvider } = {}) {
       artifacts.push(roadmapArtifact, agentsArtifact);
       await callbacks?.onArtifact?.(roadmapArtifact);
       await callbacks?.onArtifact?.(agentsArtifact);
-      const plannerTasks = (planner.tasks ?? []).map((task, index) => normalizeTask(task, tasks.length + index));
+      const plannerTasks = normalizeTaskBatch(planner.tasks ?? [], tasks.length + 1);
       tasks.push(...plannerTasks);
       if (plannerTasks.length) {
         await callbacks?.onTasks?.(plannerTasks);

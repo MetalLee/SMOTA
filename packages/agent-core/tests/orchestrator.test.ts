@@ -2,11 +2,12 @@ import { describe, expect, it } from "vitest";
 import { createAgentOrchestrator, parseJsonObjectFromText } from "../src/orchestrator";
 import type { LlmProvider } from "../src/llm";
 
-function createScriptedProvider(responses: string[]): LlmProvider {
+function createScriptedProvider(responses: string[], reasoningScripts: string[][] = []): LlmProvider {
   let index = 0;
   return {
     async generateText(input) {
-      input.onReasoning?.(`reasoning-${index + 1}`);
+      const reasoningDeltas = reasoningScripts[index] ?? [`reasoning-${index + 1}`];
+      reasoningDeltas.forEach((delta) => input.onReasoning?.(delta));
       const content = responses[index];
       index += 1;
       if (!content) {
@@ -22,7 +23,41 @@ describe("agent orchestrator", () => {
     expect(parseJsonObjectFromText('```json\n{"name":"CRM"}\n```')).toEqual({ name: "CRM" });
   });
 
-  it("runs Product, Architect, and Planner with persisted reasoning events", async () => {
+  it("removes outer markdown fences from generated harness artifact content", async () => {
+    const provider = createScriptedProvider([
+      JSON.stringify({
+        projectName: "Portfolio",
+        projectBrief: "```markdown\n# PROJECT_BRIEF.md\n\nBrief body\n```",
+        tasks: []
+      }),
+      JSON.stringify({
+        architecture: "```md\n# ARCHITECTURE.md\n\nArchitecture body\n```",
+        codexRules: "```\n# CODEX_TASK_RULES.md\n\nRules body\n```"
+      }),
+      JSON.stringify({
+        roadmap: "```Markdown\n# ROADMAP.md\n\nRoadmap body\n```",
+        agents: "# AGENTS\n\nAgent body",
+        tasks: []
+      })
+    ]);
+
+    const bundle = await createAgentOrchestrator({ llm: provider }).generateHarnessBundle({
+      prompt: "Create a designer portfolio landing page",
+      mode: "plan-first",
+      appType: "Landing Page"
+    });
+
+    expect(bundle.artifacts.find((artifact) => artifact.path === "PROJECT_BRIEF.md")?.content).toBe("# PROJECT_BRIEF.md\n\nBrief body");
+    expect(bundle.artifacts.find((artifact) => artifact.path === "ARCHITECTURE.md")?.content).toBe("# ARCHITECTURE.md\n\nArchitecture body");
+    expect(bundle.artifacts.find((artifact) => artifact.path === "CODEX_TASK_RULES.md")?.content).toBe("# CODEX_TASK_RULES.md\n\nRules body");
+    expect(bundle.artifacts.find((artifact) => artifact.path === "ROADMAP.md")?.content).toBe("# ROADMAP.md\n\nRoadmap body");
+    expect(bundle.artifacts.every((artifact) => !artifact.content.startsWith("```"))).toBe(true);
+    expect(bundle.artifacts.every((artifact) => !artifact.content.endsWith("```"))).toBe(true);
+  });
+
+  it("runs Product, Architect, and Planner without persisted reasoning events", async () => {
+    const systems: string[] = [];
+    const prompts: string[] = [];
     const provider = createScriptedProvider([
       JSON.stringify({
         projectName: "宠物诊所预约台",
@@ -39,6 +74,12 @@ describe("agent orchestrator", () => {
         tasks: [{ title: "等待用户批准计划", description: "批准后进入 Sandbox", status: "todo" }]
       })
     ]);
+    const originalGenerateText = provider.generateText;
+    provider.generateText = async (input) => {
+      systems.push(input.system);
+      prompts.push(input.prompt);
+      return originalGenerateText(input);
+    };
 
     const orchestrator = createAgentOrchestrator({ llm: provider });
     const bundle = await orchestrator.generateHarnessBundle({
@@ -57,29 +98,25 @@ describe("agent orchestrator", () => {
     ]);
     expect(bundle.artifacts.find((artifact) => artifact.path === "PROJECT_BRIEF.md")?.content).toContain("宠物诊所预约管理后台");
     expect(bundle.tasks.map((task) => task.title)).toEqual(["确认产品目标", "等待用户批准计划"]);
-    expect(bundle.events.map((event) => event.eventType)).toContain("agent.reasoning");
+    expect(bundle.events.map((event) => event.eventType)).not.toContain("agent.reasoning");
     expect(bundle.events.map((event) => event.agentName)).toEqual([
       "ProductAgent",
       "ProductAgent",
-      "ProductAgent",
       "ArchitectAgent",
       "ArchitectAgent",
-      "ArchitectAgent",
-      "PlannerAgent",
       "PlannerAgent",
       "PlannerAgent"
     ]);
     expect(bundle.events.map((event) => `${event.agentName}:${event.eventType}`)).toEqual([
       "ProductAgent:agent.started",
-      "ProductAgent:agent.reasoning",
       "ProductAgent:agent.completed",
       "ArchitectAgent:agent.started",
-      "ArchitectAgent:agent.reasoning",
       "ArchitectAgent:agent.completed",
       "PlannerAgent:agent.started",
-      "PlannerAgent:agent.reasoning",
       "PlannerAgent:agent.completed"
     ]);
+    expect(systems.every((system) => system.includes("简体中文"))).toBe(true);
+    expect(prompts.every((prompt) => prompt.includes("简体中文"))).toBe(true);
   });
 
   it("emits artifacts and project name as each planning agent completes", async () => {
@@ -124,6 +161,44 @@ describe("agent orchestrator", () => {
       "artifact:CODEX_TASK_RULES.md",
       "artifact:ROADMAP.md",
       "artifact:AGENTS.md"
+    ]);
+  });
+
+  it("reindexes generated tasks in agent execution order when model sort orders are noisy", async () => {
+    const provider = createScriptedProvider([
+      JSON.stringify({
+        projectName: "Portfolio",
+        projectBrief: "# Project Brief\nDesigner portfolio",
+        tasks: [
+          { title: "确认产品目标", description: "目标", status: "done", sortOrder: 20 },
+          { title: "梳理核心功能", description: "功能", status: "done", sortOrder: 3 }
+        ]
+      }),
+      JSON.stringify({
+        architecture: "# Architecture\nReact",
+        codexRules: "# Rules\nClean UI"
+      }),
+      JSON.stringify({
+        roadmap: "# Roadmap\nPhase 1",
+        agents: "# AGENTS\nPlannerAgent",
+        tasks: [
+          { title: "等待用户批准计划", description: "批准", status: "todo", sortOrder: 1 },
+          { title: "开发环境搭建", description: "环境", status: "todo", sortOrder: 1 }
+        ]
+      })
+    ]);
+
+    const bundle = await createAgentOrchestrator({ llm: provider }).generateHarnessBundle({
+      prompt: "Create a designer portfolio landing page",
+      mode: "plan-first",
+      appType: "Landing Page"
+    });
+
+    expect(bundle.tasks.map((task) => `${task.sortOrder}:${task.title}`)).toEqual([
+      "1:确认产品目标",
+      "2:梳理核心功能",
+      "3:等待用户批准计划",
+      "4:开发环境搭建"
     ]);
   });
 });

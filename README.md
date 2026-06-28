@@ -229,7 +229,7 @@ const bundle = await createAgentOrchestrator({ llm }).generateHarnessBundle(inpu
 
 项目创建时，`projects.name` 会先使用用户输入前十个字加 `...` 作为占位名，并立即进入项目详情页。详情页会自动调用 `POST /api/runs/[runId]/planning/start` 启动规划。ProductAgent 会根据用户输入提炼正式项目名称并回写 `projects.name`，同时生成 `PROJECT_BRIEF.md`。ArchitectAgent 会生成 `ARCHITECTURE.md` 和 `CODEX_TASK_RULES.md`。PlannerAgent 会生成 `ROADMAP.md` 并汇总 `AGENTS.md`。ReviewerAgent 会在 Sandbox build 成功后读取 build result、`run_events`、文件索引和已知问题，生成 `REVIEW_REPORT.md`。
 
-DeepSeek 流式响应中的 `reasoning_content` 会被转换为 `run_events.event_type = 'agent.reasoning'`，用于项目详情页左侧 Agent Panel 的“思考过程”展示。这里展示的是可审计的 Agent 推理摘要流，不把系统提示词或服务端密钥写入 Sandbox。若未配置模型 key 或 LLM 调用失败，规划阶段会回退到本地 mock Harness 生成器，ReviewerAgent 会回退到确定性 Review Report。
+DeepSeek 流式响应中的 `reasoning_content` 不会写入 `run_events`，也不会在项目详情页展示，避免暴露模型内部推理过程。平台只持久化 Agent 开始、完成、Fallback、Sandbox 和构建日志等可审计运行事件。若未配置模型 key 或 LLM 调用失败，规划阶段会回退到本地 mock Harness 生成器，ReviewerAgent 会回退到确定性 Review Report。
 
 如需切到网关或其他 DeepSeek 兼容端点，只覆盖 `OPENAI_BASE_URL` 和 `OPENAI_MODEL`。不要在 Agent 代码里直接读取或传播 `SUPABASE_SERVICE_ROLE_KEY`。
 
@@ -245,13 +245,23 @@ DeepSeek 流式响应中的 `reasoning_content` 会被转换为 `run_events.even
 
 `/my-projects` 使用卡片形式展示项目。卡片包含预览图、项目名、更新日期和三个点菜单；菜单仅包含“在浏览器打开”、“复制链接”、“删除”。删除需要弹窗确认。项目截图 URL 保存到 `sandbox_runs.preview_image_url`，Sandbox 构建完成并启动 preview 后会在 Sandbox 内使用 Playwright Chromium 截图，Web Function 读取 PNG 并写入该字段；字段为空时显示浅灰占位预览。
 
+`/resource` 包含“发现 / 模板”pill switch。“发现”展示已发布、处于预览中且开启 `projects.is_shared_to_discovery` 的项目，卡片复用“我的项目”样式，但隐藏“已发布”badge 和右下角菜单；“模板”当前为占位。点击发现卡片进入 `/share/[id]` 分享详情页。
+
+`/my-projects?tab=favorites` 展示当前用户收藏的共享项目。收藏关系保存在 `project_favorites`，只记录当前用户和被收藏项目，不复制运行历史。
+
+`/share/[id]` 分享详情页展示项目名称、浏览人数、克隆次数、应用 iframe 预览、创作者，以及“在浏览器打开 / 复制链接 / 收藏 / 克隆”操作。浏览和克隆计数保存在 `project_share_stats`，通过服务端 RPC 增量更新。
+
+项目详情页顶部“分享”按钮在 run 已完成、Sandbox 状态为 `previewing` 且有 preview URL 时启用。点击后展示下拉框，包含“在浏览器打开”、“复制链接”和“是否共享到「发现」中”switch，switch 默认开启。“发布”按钮会将可预览项目共享到发现；它不代表生产部署。
+
+克隆共享项目时，服务端会读取源项目最新 Sandbox 的 `workspace_files` 对应文件内容，写入新的持久化 Vercel Sandbox，并为当前用户创建新的 `projects`、`agent_runs`、`sandbox_runs` 和 `workspace_files` 记录；不会复制源项目的 `run_events`。克隆项目会记录 `projects.source_project_id`。
+
 `/projects/[id]` 包含：
 
 - 左侧 Agent Panel：项目名、原始需求、run 状态、Sandbox 状态、Agent timeline、task checklist、批准计划、启动 Sandbox、停止 Sandbox、刷新状态。
-- 左侧 Agent Panel：展示 `agent.reasoning` 事件中的最近思考过程，随工作区轮询刷新。
-- Agent timeline 根据 `agent.started`、`agent.reasoning` 和 `agent.completed` 区分等待、进行中和完成状态；只有收到 `agent.completed` 才显示完成图标。
+- 左侧 Agent Panel：展示 Agent 时间线、运行状态和任务列表。
+- Agent timeline 根据 `agent.started` 和 `agent.completed` 区分等待、进行中和完成状态；只有收到 `agent.completed` 才显示完成图标。
 - Plan Tab：规划阶段会随着 Agent 写入 `artifacts` 逐步显示 `PROJECT_BRIEF.md`、`ARCHITECTURE.md`、`CODEX_TASK_RULES.md`、`ROADMAP.md` 和 `AGENTS.md`。
-- Terminal Tab：轮询 `run_events`，展示 Agent 状态、Sandbox 创建状态、OpenCode 输出、`pnpm install`、`pnpm build`、自动修复、preview ready。stdout 和 stderr 使用不同轻量样式。
+- Terminal Tab：轮询并展示 `run_events` 中的 Agent 状态、Sandbox 创建状态、OpenCode 输出、`pnpm install`、`pnpm build`、自动修复、preview ready。stdout 和 stderr 使用不同轻量样式。
 - Files Tab：轮询读取 `workspace_files`，展示创建过程中持续索引的 Harness、Vite 初始文件和 CodingAgent 生成文件。点击文件进入 Editor Tab。
 - Editor Tab：使用 Monaco Editor 只读展示 Sandbox 文件内容。文件内容仍通过服务端 API 从 Sandbox 读取，前端不直接调用 Sandbox SDK。
 - Preview Tab：读取 `agent_runs.sandbox_preview_url`，初始依赖安装完成后 iframe 会先展示默认 Vite Home，随后随着 Sandbox 内文件变化继续显示最新页面；无 URL 时提示正在准备应用浏览器。

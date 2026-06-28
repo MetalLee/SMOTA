@@ -3,13 +3,15 @@
 import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
 import ReactMarkdown from "react-markdown";
-import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import {
   Bot,
   CheckCircle2,
   ChevronRight,
   Circle,
   Clock,
+  Copy,
+  ExternalLink,
   File,
   FileText,
   Folder,
@@ -26,30 +28,37 @@ import {
   UploadCloud,
   XCircle
 } from "lucide-react";
-import { approvePlanAction } from "@/app/actions/projects";
+import { approvePlanAction, updateProjectShareAction } from "@/app/actions/projects";
+import { FileTreeTable } from "@/components/file-tree-table";
 import { PendingButton } from "@/components/pending-button";
 import { LoadingOverlay, RouteLoadingLink, WorkspaceLoadingLink } from "@/components/route-loading";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { shouldAutoStartPlanning, shouldAutoStartSandbox } from "@/lib/project-planning";
+import { buildProjectShareUrl, getShareActionItems, isProjectShareable } from "@/lib/project-sharing";
 import { cn } from "@/lib/utils";
 import {
-  formatBytes,
   buildFileTree,
   getAgentDisplayStates,
+  getAgentDurationLabels,
   getAgentEventProgress,
-  getAgentReasoningEvents,
   getDashboardHref,
   getEditorLanguage,
   getExpandedDirectorySet,
+  getLatestRunEventCursor,
   getFileContentErrorLabel,
   getLoadingOverlayClasses,
+  getLocalizedStatusLabel,
+  getWorkbenchTabs,
+  mergeRunEvents,
   getRealtimeTabEmptyState,
   getRunControls,
-  getTaskDisplayStatus,
+  getTaskDisplayItems,
   getWorkbenchHeaderActions,
   getWorkbenchLayoutClasses,
+  shouldEnsurePreviewServer,
   shouldShowWorkspaceNavigationOverlay,
+  stripOuterMarkdownFence,
   type AgentDisplayName,
   type FileTreeNode
 } from "@/lib/workbench";
@@ -61,13 +70,14 @@ const MonacoEditor = dynamic(() => import("@monaco-editor/react"), {
 });
 
 const agents: AgentDisplayName[] = ["ProductAgent", "ArchitectAgent", "PlannerAgent", "CodingAgent", "BuildAgent", "ReviewerAgent"];
-const tabs = [
-  ["preview", "应用预览器", Monitor],
-  ["editor", "编辑器", PanelRight],
-  ["plan", "计划", FileText],
-  ["terminal", "终端", Terminal],
-  ["files", "文件", FileText]
-] as const;
+const tabIcons = {
+  plan: FileText,
+  preview: Monitor,
+  editor: PanelRight,
+  terminal: Terminal,
+  files: FileText
+};
+const tabs = getWorkbenchTabs();
 
 interface SandboxRunSnapshot {
   status: string;
@@ -103,28 +113,70 @@ export function WorkbenchClient({
   const [artifacts, setArtifacts] = useState(initialArtifacts);
   const [tasks, setTasks] = useState(initialTasks);
   const [events, setEvents] = useState(initialEvents);
+  const eventsRef = useRef(initialEvents);
   const [files, setFiles] = useState(initialFiles);
   const [sandboxRun, setSandboxRun] = useState<SandboxRunSnapshot | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [loadingAction, setLoadingAction] = useState<"start" | "stop" | null>(null);
   const [previewRefreshing, setPreviewRefreshing] = useState(false);
+  const [previewReloadNonce, setPreviewReloadNonce] = useState(0);
   const [workspaceNavigating, setWorkspaceNavigating] = useState(false);
   const [planningStarted, setPlanningStarted] = useState(false);
   const [sandboxAutoStarted, setSandboxAutoStarted] = useState(false);
   const [, startRefreshTransition] = useTransition();
+  const previewRecoveryRef = useRef<{
+    previewUrl: string | null;
+    lastAttemptAt: number | null;
+    inFlight: boolean;
+    forceNext: boolean;
+  }>({ previewUrl: null, lastAttemptAt: null, inFlight: false, forceNext: false });
 
   const queryTab = searchParams.get("tab") ?? initialActiveTab;
-  const activeTab = tabs.some(([key]) => key === queryTab) ? queryTab : "plan";
+  const activeTab = tabs.some((tab) => tab.key === queryTab) ? queryTab : "plan";
   const selectedFilePath = searchParams.get("file") ?? initialFilePath ?? files[0]?.path ?? "";
   const controls = getRunControls(run.status, run.sandbox_status);
   const layoutClasses = getWorkbenchLayoutClasses();
   const overlayClasses = getLoadingOverlayClasses();
   const headerActions = getWorkbenchHeaderActions();
+  const currentPreviewUrl = run.sandbox_preview_url ?? sandboxRun?.preview_url ?? null;
+  const shareable = isProjectShareable({ runStatus: run.status, sandboxStatus: run.sandbox_status ?? sandboxRun?.status, previewUrl: currentPreviewUrl });
 
   const refreshWorkspace = useCallback(async () => {
-    const [workspaceResponse, eventsResponse] = await Promise.all([
+    const latestEventCursor = getLatestRunEventCursor(eventsRef.current);
+    const eventsUrl = latestEventCursor
+      ? `/api/runs/${run.id}/events?after=${encodeURIComponent(latestEventCursor)}`
+      : `/api/runs/${run.id}/events`;
+    const previewUrl = run.sandbox_preview_url ?? sandboxRun?.preview_url ?? null;
+    const recoveryState = previewRecoveryRef.current;
+    if (recoveryState.previewUrl !== previewUrl) {
+      recoveryState.previewUrl = previewUrl;
+      recoveryState.lastAttemptAt = null;
+      recoveryState.inFlight = false;
+      recoveryState.forceNext = false;
+    }
+    const shouldEnsurePreview = shouldEnsurePreviewServer({
+      activeTab,
+      previewUrl,
+      inFlight: recoveryState.inFlight,
+      lastAttemptAt: recoveryState.forceNext ? null : recoveryState.lastAttemptAt,
+      cooldownMs: Number.POSITIVE_INFINITY
+    });
+    const forceEnsurePreview = recoveryState.forceNext;
+    recoveryState.forceNext = false;
+    const statusRequest = shouldEnsurePreview
+      ? (() => {
+          recoveryState.inFlight = true;
+          recoveryState.lastAttemptAt = Date.now();
+          const suffix = forceEnsurePreview ? "&force=1" : "";
+          return fetch(`/api/runs/${run.id}/sandbox/status?ensurePreview=1${suffix}`, { cache: "no-store" }).finally(() => {
+            recoveryState.inFlight = false;
+          });
+        })()
+      : Promise.resolve(null);
+    const [workspaceResponse, eventsResponse, statusResponse] = await Promise.all([
       fetch(`/api/projects/${project.id}/workspace`, { cache: "no-store" }),
-      fetch(`/api/runs/${run.id}/events`, { cache: "no-store" })
+      fetch(eventsUrl, { cache: "no-store" }),
+      statusRequest
     ]);
 
     if (workspaceResponse.ok) {
@@ -146,9 +198,22 @@ export function WorkbenchClient({
 
     if (eventsResponse.ok) {
       const payload = (await eventsResponse.json()) as { events: RunEventRow[] };
-      setEvents(payload.events);
+      setEvents((currentEvents) => {
+        const mergedEvents = mergeRunEvents(currentEvents, payload.events);
+        eventsRef.current = mergedEvents;
+        return mergedEvents;
+      });
     }
-  }, [project.id, run.id]);
+
+    if (statusResponse?.ok) {
+      const payload = (await statusResponse.json()) as { run: AgentRunRow; sandboxRun: SandboxRunSnapshot | null; previewRecovered?: boolean };
+      setRun(payload.run);
+      setSandboxRun(payload.sandboxRun);
+      if (payload.previewRecovered) {
+        setPreviewReloadNonce((value) => value + 1);
+      }
+    }
+  }, [activeTab, project.id, run.id, run.sandbox_preview_url, sandboxRun?.preview_url]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -208,6 +273,7 @@ export function WorkbenchClient({
   async function refreshAll() {
     if (previewRefreshing) return;
     setPreviewRefreshing(true);
+    previewRecoveryRef.current.forceNext = true;
     startRefreshTransition(() => {
       router.refresh();
     });
@@ -240,7 +306,8 @@ export function WorkbenchClient({
       <main className={layoutClasses.main}>
         <header className="flex h-16 items-center justify-between border-b border-border bg-white px-5">
           <nav className="flex items-center gap-1">
-            {tabs.map(([key, label, Icon]) => {
+            {tabs.map(({ key, label }) => {
+              const Icon = tabIcons[key];
               const nextFilePath = key === "editor" ? selectedFilePath : "";
 
               return (
@@ -263,18 +330,7 @@ export function WorkbenchClient({
               );
             })}
           </nav>
-          <div className="flex items-center gap-2 text-slate-300">
-            {headerActions.map((action) => {
-              const Icon = action.id === "share" ? Share2 : UploadCloud;
-
-              return (
-                <button key={action.id} disabled className="flex h-9 items-center gap-2 rounded-lg border border-border px-3 text-sm">
-                  <Icon className="h-4 w-4" />
-                  {action.label}
-                </button>
-              );
-            })}
-          </div>
+          <WorkbenchHeaderShareActions project={project} previewUrl={currentPreviewUrl} shareable={shareable} headerActions={headerActions} />
         </header>
 
         <section className={cn(layoutClasses.content, "relative")}>
@@ -282,10 +338,160 @@ export function WorkbenchClient({
           {activeTab === "terminal" ? <TerminalTab events={events} run={run} sandboxRun={sandboxRun} /> : null}
           {activeTab === "files" ? <FilesTab projectId={project.id} files={files} sandboxStatus={run.sandbox_status ?? sandboxRun?.status ?? null} onNavigateStart={() => setWorkspaceNavigating(true)} /> : null}
           {activeTab === "editor" ? <EditorTab projectId={project.id} filePath={selectedFilePath} files={files} sandboxStatus={run.sandbox_status ?? sandboxRun?.status ?? null} /> : null}
-          {activeTab === "preview" ? <PreviewTab run={run} sandboxRun={sandboxRun} onRefresh={refreshAll} refreshing={previewRefreshing} /> : null}
+          {activeTab === "preview" ? <PreviewTab run={run} sandboxRun={sandboxRun} previewReloadNonce={previewReloadNonce} onRefresh={refreshAll} refreshing={previewRefreshing} /> : null}
           {workspaceNavigating ? <LoadingOverlay className={overlayClasses.workspaceOverlay} label="正在加载工作区" /> : null}
         </section>
       </main>
+    </div>
+  );
+}
+
+function WorkbenchHeaderShareActions({
+  project,
+  previewUrl,
+  shareable,
+  headerActions
+}: {
+  project: ProjectRow;
+  previewUrl: string | null;
+  shareable: boolean;
+  headerActions: ReturnType<typeof getWorkbenchHeaderActions>;
+}) {
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shared, setShared] = useState(project.is_shared_to_discovery ?? true);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const [pending, startTransition] = useTransition();
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const shareActions = useMemo(() => getShareActionItems(), []);
+  const shareUrl = typeof window === "undefined" ? `/share/${project.id}` : buildProjectShareUrl(window.location.origin, project.id);
+
+  useEffect(() => {
+    setShared(project.is_shared_to_discovery ?? true);
+  }, [project.is_shared_to_discovery]);
+
+  useEffect(() => {
+    if (!shareOpen) return;
+
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (!menuRef.current?.contains(target) && !buttonRef.current?.contains(target)) {
+        setShareOpen(false);
+        setCopyState("idle");
+      }
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [shareOpen]);
+
+  async function copyShareUrl() {
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopyState("copied");
+    } catch {
+      setCopyState("failed");
+    }
+  }
+
+  function setDiscoveryShare(nextShared: boolean) {
+    if (pending) return;
+    const previous = shared;
+    setShared(nextShared);
+    const formData = new FormData();
+    formData.set("projectId", project.id);
+    formData.set("shared", String(nextShared));
+    startTransition(async () => {
+      try {
+        await updateProjectShareAction(formData);
+      } catch {
+        setShared(previous);
+      }
+    });
+  }
+
+  function publishProject() {
+    setDiscoveryShare(true);
+  }
+
+  return (
+    <div className="relative flex items-center gap-2">
+      {headerActions.map((action) => {
+        const Icon = action.id === "share" ? Share2 : UploadCloud;
+        if (action.id === "publish") {
+          return (
+            <button
+              key={action.id}
+              type="button"
+              disabled={!shareable || pending}
+              className="flex h-9 items-center gap-2 rounded-lg border border-border px-3 text-sm font-medium text-slate-500 transition hover:bg-slate-50 hover:text-ink disabled:cursor-not-allowed disabled:text-slate-300"
+              onClick={publishProject}
+            >
+              {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Icon className="h-4 w-4" />}
+              {shareable && shared ? "已发布" : action.label}
+            </button>
+          );
+        }
+
+        return (
+          <button
+            key={action.id}
+            ref={buttonRef}
+            type="button"
+            disabled={!shareable}
+            aria-expanded={shareOpen}
+            className="flex h-9 items-center gap-2 rounded-lg border border-border px-3 text-sm font-medium text-slate-500 transition hover:bg-slate-50 hover:text-ink disabled:cursor-not-allowed disabled:text-slate-300"
+            onClick={() => {
+              setShareOpen((open) => !open);
+              setCopyState("idle");
+            }}
+          >
+            <Icon className="h-4 w-4" />
+            {action.label}
+          </button>
+        );
+      })}
+
+      {shareOpen ? (
+        <div ref={menuRef} className="absolute right-0 top-11 z-50 w-72 rounded-lg border border-border bg-white p-2 text-sm shadow-xl">
+          {shareActions.map((item) => (
+            <button
+              key={item.action}
+              type="button"
+              className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-slate-700 transition hover:bg-slate-50 hover:text-ink"
+              onClick={() => {
+                if (item.action === "open" && previewUrl) {
+                  window.open(previewUrl, "_blank", "noopener,noreferrer");
+                  setShareOpen(false);
+                }
+                if (item.action === "copy") void copyShareUrl();
+              }}
+            >
+              {item.action === "open" ? <ExternalLink className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+              {item.label}
+            </button>
+          ))}
+          <div className="mt-1 flex items-center justify-between rounded-md px-3 py-2.5 text-slate-700">
+            <span>是否共享到「发现」中</span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={shared}
+              disabled={pending}
+              className={cn("relative h-6 w-11 rounded-full transition", shared ? "bg-primary" : "bg-slate-200", pending && "opacity-60")}
+              onClick={() => setDiscoveryShare(!shared)}
+            >
+              <span className={cn("absolute top-1 h-4 w-4 rounded-full bg-white transition", shared ? "left-6" : "left-1")} />
+            </button>
+          </div>
+          {copyState !== "idle" ? (
+            <div className={cn("px-3 pb-1 pt-2 text-xs", copyState === "copied" ? "text-slate-500" : "text-red-600")}>
+              {copyState === "copied" ? "链接已复制" : "复制失败"}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -316,7 +522,8 @@ function AgentPanel({
   layoutClasses: ReturnType<typeof getWorkbenchLayoutClasses>;
 }) {
   const agentProgress = useMemo(() => getAgentEventProgress(events), [events]);
-  const reasoningEvents = useMemo(() => getAgentReasoningEvents(events), [events]);
+  const agentDurationLabels = useMemo(() => getAgentDurationLabels(events), [events]);
+  const taskDisplayItems = useMemo(() => getTaskDisplayItems(tasks, run.status, run.sandbox_status), [run.sandbox_status, run.status, tasks]);
   const dashboardHref = getDashboardHref();
   const agentStates = useMemo(
     () =>
@@ -340,25 +547,26 @@ function AgentPanel({
             <div className="text-sm font-bold">SMOTA</div>
           </RouteLoadingLink>
           <h1 className="text-xl font-bold">{project.name}</h1>
-          <p className="mt-2 text-sm leading-6 text-slate-500">{project.prompt}</p>
         </div>
 
         <div className="mb-4 grid grid-cols-2 gap-2">
-          <StatusPill label="Run" value={run.status} />
-          <StatusPill label="Sandbox" value={run.sandbox_status ?? "not_ready"} />
+          <StatusPill label="运行状态" value={getLocalizedStatusLabel(run.status)} />
+          <StatusPill label="沙箱状态" value={getLocalizedStatusLabel(run.sandbox_status ?? "not_ready")} />
         </div>
 
         <div className="mb-6">
-          <div className="mb-3 text-sm font-semibold text-slate-700">Agent step timeline</div>
+          <div className="mb-3 text-sm font-semibold text-slate-700">Agent时间线</div>
           <div className="space-y-2">
             {agents.map((agent) => {
               const displayStatus = agentStates[agent];
+              const durationLabel = agentDurationLabels[agent] ?? "-";
               return (
                 <div key={agent} className="flex items-center gap-3 rounded-lg border border-border bg-slate-50 px-3 py-2">
                   <div className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-primary">
                     <Bot className="h-4 w-4" />
                   </div>
                   <span className="flex-1 text-sm font-medium text-slate-700">{agent}</span>
+                  <span className="min-w-[3.5rem] text-right text-xs font-medium tabular-nums text-slate-400">{durationLabel}</span>
                   {displayStatus === "done" ? (
                     <CheckCircle2 className="h-4 w-4 text-emerald-500" />
                   ) : displayStatus === "in_progress" ? (
@@ -372,44 +580,24 @@ function AgentPanel({
           </div>
         </div>
 
-        <div className="mb-6 rounded-lg border border-border p-4">
-          <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">当前阶段</div>
-          <div className="mt-2 text-sm font-semibold text-slate-700">{run.current_step ?? run.status}</div>
-          {run.build_error ? <div className="mt-2 line-clamp-3 text-xs leading-5 text-red-600">{run.build_error}</div> : null}
-        </div>
-
-        {reasoningEvents.length ? (
-          <div className="mb-6 rounded-lg border border-border bg-white p-4">
-            <div className="mb-3 text-sm font-semibold text-slate-700">思考过程</div>
-            <div className="space-y-3">
-              {reasoningEvents.map((event, index) => (
-                <div key={`${event.agentName}-${index}`} className="text-xs leading-5 text-slate-500">
-                  <span className="font-semibold text-slate-700">{event.agentName}</span>
-                  <span className="mx-1 text-slate-300">/</span>
-                  {event.message}
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : null}
-
         <div className="pb-6">
-          <div className="mb-3 text-sm font-semibold text-slate-700">task checklist</div>
-          <div className="space-y-2">
-            {tasks.map((task) => {
-              const displayStatus = getTaskDisplayStatus(task.status, run.status, run.sandbox_status);
+          <div className="mb-3 text-sm font-semibold text-slate-700">任务列表</div>
+          <div className="space-y-3">
+            {taskDisplayItems.map(({ task, displayStatus }) => {
               return (
-                <div key={task.id} className="flex gap-2 text-sm text-slate-600">
-                  {displayStatus === "done" ? (
-                    <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-500" />
-                  ) : displayStatus === "in_progress" ? (
-                    <Loader2 className="mt-0.5 h-4 w-4 animate-spin text-primary" />
-                  ) : (
-                    <Circle className="mt-0.5 h-4 w-4 text-slate-300" />
-                  )}
-                  <div>
-                    <div className="font-medium text-slate-700">{task.title}</div>
-                    <div className="text-xs leading-5 text-slate-500">{task.description}</div>
+                <div key={task.id} className="grid grid-cols-[20px_minmax(0,1fr)] gap-2 text-sm text-slate-600">
+                  <div className="flex h-5 w-5 shrink-0 items-start justify-center pt-0.5">
+                    {displayStatus === "done" ? (
+                      <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
+                    ) : displayStatus === "in_progress" ? (
+                      <Loader2 className="h-4 w-4 shrink-0 animate-spin text-primary" />
+                    ) : (
+                      <Circle className="h-4 w-4 shrink-0 text-slate-300" />
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="break-words font-medium leading-5 text-slate-700">{task.title}</div>
+                    {task.description ? <div className="mt-0.5 break-words text-xs leading-5 text-slate-500">{task.description}</div> : null}
                   </div>
                 </div>
               );
@@ -442,7 +630,7 @@ function AgentPanel({
           {controls.primaryAction === "stop" ? (
             <Button type="button" disabled={loadingAction !== null} onClick={() => void onStop()} className="w-full bg-slate-900 hover:bg-slate-700">
               {loadingAction === "stop" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Square className="h-4 w-4" />}
-              停止 Sandbox
+              鍋滄 Sandbox
             </Button>
           ) : null}
           {controls.primaryAction === "complete" ? (
@@ -470,7 +658,19 @@ function StatusPill({ label, value }: { label: string; value: string }) {
   );
 }
 
-function PreviewTab({ run, sandboxRun, onRefresh, refreshing }: { run: AgentRunRow; sandboxRun: SandboxRunSnapshot | null; onRefresh: () => Promise<void>; refreshing: boolean }) {
+function PreviewTab({
+  run,
+  sandboxRun,
+  previewReloadNonce,
+  onRefresh,
+  refreshing
+}: {
+  run: AgentRunRow;
+  sandboxRun: SandboxRunSnapshot | null;
+  previewReloadNonce: number;
+  onRefresh: () => Promise<void>;
+  refreshing: boolean;
+}) {
   const [failed, setFailed] = useState(false);
   const previewUrl = run.sandbox_preview_url ?? sandboxRun?.preview_url ?? null;
 
@@ -504,7 +704,7 @@ function PreviewTab({ run, sandboxRun, onRefresh, refreshing }: { run: AgentRunR
       {failed ? (
         <div className="flex flex-1 items-center justify-center p-8 text-center text-sm text-red-600">预览服务暂不可用，请检查 Sandbox 状态</div>
       ) : (
-        <iframe title="Sandbox preview" src={previewUrl} onError={() => setFailed(true)} className="h-full w-full" />
+        <iframe key={`${previewUrl}:${previewReloadNonce}`} title="Sandbox preview" src={previewUrl} onError={() => setFailed(true)} className="h-full w-full" />
       )}
     </div>
   );
@@ -512,7 +712,7 @@ function PreviewTab({ run, sandboxRun, onRefresh, refreshing }: { run: AgentRunR
 
 function PlanTab({ artifacts }: { artifacts: ArtifactRow[] }) {
   if (!artifacts.length) {
-    return <EmptyState title="正在生成计划" body="ProductAgent、ArchitectAgent 和 PlannerAgent 会逐步写入 Harness 文档，内容会自动出现在这里。" />;
+    return <EmptyState title="正在生成概览" body="ProductAgent、ArchitectAgent 和 PlannerAgent 会逐步写入 Harness 文档，内容会自动出现在这里。" />;
   }
 
   return (
@@ -525,7 +725,7 @@ function PlanTab({ artifacts }: { artifacts: ArtifactRow[] }) {
               <div className="text-xs text-slate-400">{artifact.title}</div>
             </div>
           </div>
-          <ReactMarkdown className="markdown">{artifact.content}</ReactMarkdown>
+          <ReactMarkdown className="markdown">{stripOuterMarkdownFence(artifact.content)}</ReactMarkdown>
         </Card>
       ))}
     </div>
@@ -539,7 +739,7 @@ function TerminalTab({ events, run, sandboxRun }: { events: RunEventRow[]; run: 
         <div>
           <div className="text-sm font-bold">Run Events</div>
           <div className="mt-1 text-xs text-slate-400">
-            Agent: {run.status} · Sandbox: {run.sandbox_status ?? sandboxRun?.status ?? "not_ready"} · Build: {run.build_status ?? "pending"}
+            Agent: {run.status} 路 Sandbox: {run.sandbox_status ?? sandboxRun?.status ?? "not_ready"} 路 Build: {run.build_status ?? "pending"}
           </div>
         </div>
       </div>
@@ -569,31 +769,9 @@ function FilesTab({ projectId, files, sandboxStatus, onNavigateStart }: { projec
   }
 
   return (
-    <Card className="mx-auto max-w-6xl overflow-hidden">
-      <div className="grid grid-cols-[minmax(220px,1fr)_120px_140px_110px_190px] border-b border-border bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-400">
-        <div>path</div>
-        <div>file_type</div>
-        <div>change_type</div>
-        <div>size</div>
-        <div>last_modified_at</div>
-      </div>
-      <div className="divide-y divide-border">
-        {files.map((file) => (
-          <WorkspaceLoadingLink
-            key={file.id}
-            href={`/projects/${projectId}?tab=editor&file=${encodeURIComponent(file.path)}`}
-            onNavigateStart={onNavigateStart}
-            className="grid grid-cols-[minmax(220px,1fr)_120px_140px_110px_190px] px-5 py-3 text-sm hover:bg-slate-50"
-          >
-            <span className="truncate font-medium text-slate-800">{file.path}</span>
-            <span className="text-slate-500">{file.file_type ?? "file"}</span>
-            <span className="text-slate-500">{file.change_type ?? "generated"}</span>
-            <span className="text-slate-500">{formatBytes(file.size)}</span>
-            <span className="text-slate-500">{file.last_modified_at ? new Date(file.last_modified_at).toLocaleString() : "-"}</span>
-          </WorkspaceLoadingLink>
-        ))}
-      </div>
-    </Card>
+    <div className="mx-auto max-w-6xl">
+      <FileTreeTable projectId={projectId} files={files} onNavigateStart={onNavigateStart} />
+    </div>
   );
 }
 

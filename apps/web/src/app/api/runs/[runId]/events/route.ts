@@ -24,7 +24,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ runI
 
   let query = supabase.from("run_events").select("*").eq("run_id", runId).eq("owner_id", user.id).order("created_at", { ascending: true });
   if (after) {
-    query = query.gt("created_at", after);
+    query = query.gte("created_at", after);
   }
 
   const { data: events, error } = await query.limit(500);

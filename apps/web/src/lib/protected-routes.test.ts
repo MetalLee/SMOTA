@@ -11,6 +11,7 @@ describe("protected routes", () => {
   it("protects nested project and run routes without matching unrelated paths", () => {
     expect(isProtectedPath("/projects/project-1")).toBe(true);
     expect(isProtectedPath("/runs/run-1")).toBe(true);
+    expect(isProtectedPath("/share/project-1")).toBe(true);
     expect(isProtectedPath("/resource/templates")).toBe(true);
     expect(isProtectedPath("/auth/login")).toBe(false);
     expect(isProtectedPath("/dashboard-preview")).toBe(false);

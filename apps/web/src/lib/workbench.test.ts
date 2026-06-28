@@ -1,16 +1,24 @@
 import { describe, expect, it } from "vitest";
 import {
   getAgentDisplayStates,
+  getAgentDurationLabels,
   buildFileTree,
   getDashboardHref,
   getEditorLanguage,
   getExpandedDirectorySet,
+  getFileTreeTableRows,
+  getLatestRunEventCursor,
+  getLocalizedStatusLabel,
   getRealtimeTabEmptyState,
+  getWorkbenchTabs,
   getWorkbenchHeaderActions,
   getFileContentErrorLabel,
   getLoadingOverlayClasses,
   getAgentEventProgress,
-  getAgentReasoningEvents,
+  getTaskDisplayItems,
+  shouldEnsurePreviewServer,
+  stripOuterMarkdownFence,
+  mergeRunEvents,
   getRunControls,
   getTaskDisplayStatus,
   getWorkbenchLayoutClasses,
@@ -105,6 +113,9 @@ describe("workbench helpers", () => {
 
     expect(classes.globalOverlay).toContain("fixed");
     expect(classes.globalOverlay).toContain("backdrop-blur");
+    expect(classes.mainAreaOverlay).toContain("fixed");
+    expect(classes.mainAreaOverlay).toContain("left-64");
+    expect(classes.mainAreaOverlay).toContain("right-0");
     expect(classes.workspaceOverlay).toContain("absolute");
     expect(classes.workspaceOverlay).toContain("inset-0");
     expect(classes.workspaceOverlay).toContain("backdrop-blur");
@@ -124,6 +135,167 @@ describe("workbench helpers", () => {
 
   it("uses dashboard as the workbench brand destination", () => {
     expect(getDashboardHref()).toBe("/dashboard");
+  });
+
+  it("throttles automatic Sandbox preview recovery checks while the preview tab has a URL", () => {
+    expect(shouldEnsurePreviewServer({ activeTab: "preview", previewUrl: "https://preview.example.dev", now: 1000 })).toBe(true);
+    expect(shouldEnsurePreviewServer({ activeTab: "preview", previewUrl: null, now: 1000 })).toBe(false);
+    expect(shouldEnsurePreviewServer({ activeTab: "files", previewUrl: "https://preview.example.dev", now: 1000 })).toBe(false);
+    expect(
+      shouldEnsurePreviewServer({
+        activeTab: "preview",
+        previewUrl: "https://preview.example.dev",
+        inFlight: true,
+        now: 1000
+      })
+    ).toBe(false);
+    expect(
+      shouldEnsurePreviewServer({
+        activeTab: "preview",
+        previewUrl: "https://preview.example.dev",
+        lastAttemptAt: 1000,
+        now: 30_000,
+        cooldownMs: 60_000
+      })
+    ).toBe(false);
+    expect(
+      shouldEnsurePreviewServer({
+        activeTab: "preview",
+        previewUrl: "https://preview.example.dev",
+        lastAttemptAt: 1000,
+        now: 61_000,
+        cooldownMs: 60_000
+      })
+    ).toBe(true);
+  });
+
+  it("removes only the outer markdown fence from artifact content", () => {
+    expect(stripOuterMarkdownFence("```markdown\n# ARCHITECTURE.md\n\nBody\n```")).toBe("# ARCHITECTURE.md\n\nBody");
+    expect(stripOuterMarkdownFence("```md\r\n# RULES\r\n\r\nBody\r\n```")).toBe("# RULES\n\nBody".replaceAll("\n", "\r\n").trim());
+    expect(stripOuterMarkdownFence("# Title\n\n```ts\nconst ok = true;\n```")).toBe("# Title\n\n```ts\nconst ok = true;\n```");
+  });
+
+  it("puts the overview tab before the preview tab", () => {
+    expect(getWorkbenchTabs().map((tab) => `${tab.key}:${tab.label}`)).toEqual([
+      "plan:概览",
+      "preview:应用预览器",
+      "editor:编辑器",
+      "terminal:终端",
+      "files:文件"
+    ]);
+  });
+
+  it("builds tree table rows for workspace files", () => {
+    const rows = getFileTreeTableRows([
+      {
+        id: "file-app",
+        path: "src/App.tsx",
+        file_type: "tsx",
+        change_type: "generated",
+        size: 120,
+        last_modified_at: "2026-06-28T00:00:00.000Z"
+      },
+      {
+        id: "file-package",
+        path: "package.json",
+        file_type: "json",
+        change_type: "generated",
+        size: 80,
+        last_modified_at: "2026-06-28T00:00:00.000Z"
+      }
+    ]);
+
+    expect(rows.map((row) => `${row.kind}:${row.depth}:${row.name}:${row.path}`)).toEqual([
+      "directory:0:src:src",
+      "file:1:App.tsx:src/App.tsx",
+      "file:0:package.json:package.json"
+    ]);
+    expect(rows.find((row) => row.path === "src/App.tsx")?.file?.id).toBe("file-app");
+    expect(rows.find((row) => row.path === "src")?.file).toBeNull();
+  });
+
+  it("merges polled run events without dropping earlier timeline context", () => {
+    const initialEvents = [
+      { id: "event-2", created_at: "2026-06-28T00:00:02.000Z", event_type: "sandbox.command.started" },
+      { id: "event-1", created_at: "2026-06-28T00:00:01.000Z", event_type: "agent.started" }
+    ];
+    const polledEvents = [
+      { id: "event-2", created_at: "2026-06-28T00:00:02.000Z", event_type: "sandbox.command.started" },
+      { id: "event-3", created_at: "2026-06-28T00:00:03.000Z", event_type: "sandbox.command.finished" }
+    ];
+
+    const mergedEvents = mergeRunEvents(initialEvents, polledEvents);
+
+    expect(mergedEvents.map((event) => event.id)).toEqual(["event-1", "event-2", "event-3"]);
+    expect(getLatestRunEventCursor(mergedEvents)).toBe("2026-06-28T00:00:03.000Z");
+  });
+
+  it("localizes run and sandbox status labels for the sidebar", () => {
+    expect(getLocalizedStatusLabel("pending_approval")).toBe("待批准");
+    expect(getLocalizedStatusLabel("not_ready")).toBe("未就绪");
+    expect(getLocalizedStatusLabel("approved_waiting_for_sandbox")).toBe("等待沙箱启动");
+    expect(getLocalizedStatusLabel("custom_state")).toBe("custom_state");
+    expect(getLocalizedStatusLabel(null)).toBe("未就绪");
+  });
+
+  it("formats agent duration labels from persisted timeline events", () => {
+    expect(
+      getAgentDurationLabels(
+        [
+          { agent_name: "ProductAgent", event_type: "agent.started", created_at: "2026-06-28T00:00:00.000Z" },
+          { agent_name: "ProductAgent", event_type: "agent.completed", created_at: "2026-06-28T00:00:01.500Z" },
+          { agent_name: "ArchitectAgent", event_type: "agent.started", created_at: "2026-06-28T00:00:02.000Z" }
+        ],
+        "2026-06-28T00:01:07.000Z"
+      )
+    ).toMatchObject({
+      ProductAgent: "1.5秒",
+      ArchitectAgent: "1分05秒"
+    });
+  });
+
+  it("clamps negative agent durations caused by out-of-order event timestamps", () => {
+    expect(
+      getAgentDurationLabels([
+        { agent_name: "PlannerAgent", event_type: "agent.started", created_at: "2026-06-28T00:00:02.000Z" },
+        { agent_name: "PlannerAgent", event_type: "agent.completed", created_at: "2026-06-28T00:00:01.500Z" }
+      ])
+    ).toMatchObject({
+      PlannerAgent: "0秒"
+    });
+  });
+
+  it("derives sandbox phase agent durations from persisted workflow events", () => {
+    expect(
+      getAgentDurationLabels([
+        { agent_name: null, event_type: "sandbox.command.started", step: "opencode_run", created_at: "2026-06-28T00:00:00.000Z" },
+        { agent_name: null, event_type: "sandbox.command.finished", step: "opencode_run", created_at: "2026-06-28T00:00:10.000Z" },
+        { agent_name: null, event_type: "sandbox.command.started", step: "install", created_at: "2026-06-28T00:00:12.000Z" },
+        { agent_name: null, event_type: "build.started", step: "build", created_at: "2026-06-28T00:00:20.000Z" },
+        { agent_name: null, event_type: "build.succeeded", step: "build", created_at: "2026-06-28T00:00:42.000Z" },
+        { agent_name: null, event_type: "review.screenshot.started", step: "review_screenshot", created_at: "2026-06-28T00:00:45.000Z" },
+        { agent_name: null, event_type: "artifact.created", step: "review_report", created_at: "2026-06-28T00:01:05.000Z" }
+      ])
+    ).toMatchObject({
+      CodingAgent: "10秒",
+      BuildAgent: "30秒",
+      ReviewerAgent: "20秒"
+    });
+  });
+
+  it("sorts task display items into a stable progress order", () => {
+    expect(
+      getTaskDisplayItems(
+        [
+          { id: "todo-late", title: "开发环境搭建", description: null, status: "todo", sort_order: 1, created_at: "2026-06-28T00:00:03.000Z" },
+          { id: "done-late", title: "输出产品简要", description: null, status: "done", sort_order: 9, created_at: "2026-06-28T00:00:02.000Z" },
+          { id: "doing", title: "创建线框图", description: null, status: "in_progress", sort_order: 2, created_at: "2026-06-28T00:00:01.000Z" },
+          { id: "todo-early", title: "收集设计素材", description: null, status: "todo", sort_order: 0, created_at: "2026-06-28T00:00:00.000Z" }
+        ],
+        "planning",
+        null
+      ).map((item) => `${item.displayStatus}:${item.task.id}`)
+    ).toEqual(["done:done-late", "in_progress:doing", "todo:todo-early", "todo:todo-late"]);
   });
 
   it("derives waiting, running, and completed planning agent states from event types", () => {
@@ -167,19 +339,6 @@ describe("workbench helpers", () => {
       ArchitectAgent: "in_progress",
       PlannerAgent: "todo"
     });
-  });
-
-  it("keeps recent agent reasoning events for the left panel", () => {
-    expect(
-      getAgentReasoningEvents(
-        [
-          { agent_name: "ProductAgent", event_type: "agent.reasoning", message: "明确目标用户", created_at: "2026-06-28T00:00:00.000Z" },
-          { agent_name: "PlannerAgent", event_type: "agent.completed", message: "完成计划", created_at: "2026-06-28T00:00:01.000Z" },
-          { agent_name: "ArchitectAgent", event_type: "agent.reasoning", message: "确定安全边界", created_at: "2026-06-28T00:00:02.000Z" }
-        ],
-        1
-      )
-    ).toEqual([{ agentName: "ArchitectAgent", message: "确定安全边界" }]);
   });
 
   it("describes realtime Sandbox visibility in Preview, Editor, and Files empty states", () => {

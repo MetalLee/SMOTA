@@ -15,6 +15,18 @@ export interface MyProjectCard {
   previewImageUrl: string | null;
   updatedDate: string;
   published: boolean;
+  showMenu: boolean;
+  showPublishedBadge: boolean;
+  creatorName?: string;
+  creatorAvatarUrl?: string | null;
+  viewCount?: number;
+}
+
+export interface SharedProjectCardMetadata {
+  projectId: string;
+  creatorName: string;
+  creatorAvatarUrl?: string | null;
+  viewCount: number;
 }
 
 export type ProjectCardMenuItem = {
@@ -61,7 +73,40 @@ export function toProjectCards(projects: ProjectRow[], runs: SandboxRunPreviewRo
       openUrl: previewUrl || href,
       previewImageUrl: latestRun?.preview_image_url?.trim() || null,
       updatedDate: formatProjectCardDate(project.updated_at),
-      published: Boolean(previewUrl)
+      published: Boolean(previewUrl),
+      showMenu: true,
+      showPublishedBadge: Boolean(previewUrl)
+    };
+  });
+}
+
+export function toDiscoveryProjectCards(
+  projects: ProjectRow[],
+  runs: SandboxRunPreviewRow[] = [],
+  metadata: SharedProjectCardMetadata[] = []
+): MyProjectCard[] {
+  const latestRunByProject = new Map(groupLatestSandboxRunsByProject(runs).map((run) => [run.project_id, run]));
+  const metadataByProject = new Map(metadata.map((item) => [item.projectId, item]));
+
+  return projects.map((project) => {
+    const href = `/share/${project.id}`;
+    const latestRun = latestRunByProject.get(project.id);
+    const previewUrl = latestRun?.preview_url?.trim() || "";
+    const cardMetadata = metadataByProject.get(project.id);
+
+    return {
+      id: project.id,
+      name: project.name?.trim() || "未命名项目",
+      href,
+      openUrl: previewUrl || href,
+      previewImageUrl: latestRun?.preview_image_url?.trim() || null,
+      updatedDate: formatProjectCardDate(project.updated_at),
+      published: Boolean(previewUrl),
+      showMenu: false,
+      showPublishedBadge: false,
+      creatorName: cardMetadata?.creatorName,
+      creatorAvatarUrl: cardMetadata?.creatorAvatarUrl ?? null,
+      viewCount: cardMetadata?.viewCount
     };
   });
 }
@@ -75,12 +120,12 @@ export function getProjectCardMenuItems(): ProjectCardMenuItem[] {
 }
 
 export function getMyProjectsGridClass() {
-  return "grid grid-cols-[repeat(auto-fit,minmax(18rem,1fr))] gap-6";
+  return "grid grid-cols-[repeat(auto-fill,360px)] gap-5";
 }
 
 export function getProjectCardShellClass(menuOpen: boolean) {
   return [
-    "relative overflow-visible rounded-lg border border-border bg-white shadow-sm transition hover:-translate-y-0.5 hover:shadow-soft",
+    "relative w-[360px] overflow-visible rounded-lg border border-border bg-white shadow-sm transition hover:-translate-y-0.5 hover:shadow-soft",
     menuOpen ? "z-30" : "z-0"
   ].join(" ");
 }
@@ -98,7 +143,7 @@ export function getPublishedBadgeClass() {
 
 export function getPreviewPlaceholderClasses() {
   return {
-    surface: "relative h-52 overflow-hidden rounded-t-lg border-b border-slate-200 bg-slate-100",
+    surface: "relative aspect-video overflow-hidden rounded-t-lg border-b border-slate-200 bg-slate-100",
     artwork:
       "absolute inset-0 opacity-80 [background-image:linear-gradient(135deg,rgba(97,87,255,0.12)_0_1px,transparent_1px_42px),repeating-linear-gradient(0deg,transparent_0_27px,rgba(148,163,184,0.22)_28px_29px),repeating-linear-gradient(90deg,transparent_0_35px,rgba(148,163,184,0.18)_36px_37px)]",
     wash: "absolute inset-0 bg-gradient-to-br from-white/80 via-white/35 to-slate-200/50"

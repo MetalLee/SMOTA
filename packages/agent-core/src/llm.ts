@@ -37,10 +37,14 @@ export interface LlmProvider {
 
 type Fetcher = typeof fetch;
 
+function firstNonEmptyEnvValue(...values: Array<string | undefined>): string {
+  return values.find((value) => value?.trim())?.trim() ?? "";
+}
+
 export function buildAgentLlmConfig(env: Record<string, string | undefined> = process.env): AgentLlmConfig {
   return {
     provider: "deepseek",
-    apiKey: env.OPENAI_API_KEY ?? env.DEEPSEEK_API_KEY ?? "",
+    apiKey: firstNonEmptyEnvValue(env.OPENAI_API_KEY, env.DEEPSEEK_API_KEY),
     baseUrl: env.OPENAI_BASE_URL || DEEPSEEK_OPENAI_BASE_URL,
     model: env.OPENAI_MODEL || DEEPSEEK_V4_PRO_MODEL,
     temperature: Number(env.OPENAI_TEMPERATURE ?? 0.2)

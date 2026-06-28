@@ -8,6 +8,7 @@ import {
   getProjectCardMenuClass,
   getProjectCardShellClass,
   getPublishedBadgeClass,
+  toDiscoveryProjectCards,
   groupLatestSandboxRunsByProject,
   shouldCloseProjectMenuOnPointerDown,
   shouldPlaceProjectMenuAbove,
@@ -79,7 +80,9 @@ describe("my projects helpers", () => {
         openUrl: "https://preview.example.dev",
         previewImageUrl: "https://assets.example.dev/preview.png",
         updatedDate: "2026/06/27",
-        published: true
+        published: true,
+        showMenu: true,
+        showPublishedBadge: true
       }
     ]);
   });
@@ -108,14 +111,65 @@ describe("my projects helpers", () => {
     expect(card?.openUrl).toBe("/projects/project-2");
     expect(card?.previewImageUrl).toBeNull();
     expect(card?.published).toBe(false);
+    expect(card?.showMenu).toBe(true);
+    expect(card?.showPublishedBadge).toBe(false);
+  });
+
+  it("projects shared discovery rows into card links without owner-only controls", () => {
+    const [card] = toDiscoveryProjectCards(
+      [
+        {
+          id: "project-3",
+          owner_id: "user-2",
+          name: "销售页",
+          description: "prompt",
+          prompt: "prompt",
+          app_type: "Landing Page",
+          mode: "plan-first",
+          status: "succeeded",
+          is_shared_to_discovery: true,
+          shared_at: "2026-06-27T00:00:00.000Z",
+          source_project_id: null,
+          created_at: "2026-06-20T00:00:00.000Z",
+          updated_at: "2026-06-27T00:00:00.000Z"
+        }
+      ],
+      [
+        {
+          project_id: "project-3",
+          preview_url: "https://preview.example.dev",
+          preview_image_url: null,
+          updated_at: "2026-06-27T01:00:00.000Z"
+        }
+      ],
+      [
+        {
+          projectId: "project-3",
+          creatorName: "Cauã Martins Ribeiro",
+          creatorAvatarUrl: "https://assets.example.dev/avatar.png",
+          viewCount: 270
+        }
+      ]
+    );
+
+    expect(card).toMatchObject({
+      href: "/share/project-3",
+      openUrl: "https://preview.example.dev",
+      published: true,
+      showMenu: false,
+      showPublishedBadge: false,
+      creatorName: "Cauã Martins Ribeiro",
+      creatorAvatarUrl: "https://assets.example.dev/avatar.png",
+      viewCount: 270
+    });
   });
 
   it("keeps project card actions limited to browser, copy, and delete", () => {
     expect(getProjectCardMenuItems().map((item) => item.label)).toEqual(["在浏览器打开", "复制链接", "删除"]);
   });
 
-  it("uses an auto-fitting grid for responsive card counts per row", () => {
-    expect(getMyProjectsGridClass()).toContain("grid-cols-[repeat(auto-fit,minmax(18rem,1fr))]");
+  it("uses a fixed-width card grid so each row can fit more stable cards", () => {
+    expect(getMyProjectsGridClass()).toContain("grid-cols-[repeat(auto-fill,360px)]");
   });
 
   it("uses a theme-colored published badge", () => {
@@ -129,12 +183,14 @@ describe("my projects helpers", () => {
     const classes = getPreviewPlaceholderClasses();
 
     expect(classes.surface).toContain("bg-slate-100");
+    expect(classes.surface).toContain("aspect-video");
     expect(`${classes.surface} ${classes.artwork}`).not.toContain("rounded-full");
     expect(`${classes.surface} ${classes.artwork}`).not.toContain("grid");
     expect(classes.artwork).toContain("repeating-linear-gradient");
   });
 
-  it("raises an open card menu above sibling cards", () => {
+  it("keeps project cards at a fixed 360px width and raises open menus above sibling cards", () => {
+    expect(getProjectCardShellClass(false)).toContain("w-[360px]");
     expect(getProjectCardShellClass(false)).not.toContain("z-30");
     expect(getProjectCardShellClass(true)).toContain("z-30");
   });

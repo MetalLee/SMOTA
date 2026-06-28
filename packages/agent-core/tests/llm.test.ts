@@ -32,6 +32,15 @@ describe("agent LLM configuration", () => {
     expect(config.model).toBe("deepseek-v4-flash");
   });
 
+  it("falls back to DeepSeek key when OpenAI key is present but empty", () => {
+    const config = buildAgentLlmConfig({
+      OPENAI_API_KEY: "",
+      DEEPSEEK_API_KEY: "deepseek-key"
+    });
+
+    expect(config.apiKey).toBe("deepseek-key");
+  });
+
   it("builds OpenAI-compatible chat completion requests without LangChain", () => {
     const request = buildChatCompletionsRequest({
       OPENAI_API_KEY: "deepseek-key"

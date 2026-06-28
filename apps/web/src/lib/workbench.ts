@@ -1,6 +1,7 @@
 export type PrimaryRunAction = "approve" | "start" | "stop" | "complete" | "error" | "none";
 export type DisplayProgressStatus = "todo" | "in_progress" | "done";
 export type AgentDisplayName = "ProductAgent" | "ArchitectAgent" | "PlannerAgent" | "CodingAgent" | "BuildAgent" | "ReviewerAgent";
+export type WorkbenchTabKey = "plan" | "preview" | "editor" | "terminal" | "files";
 
 export interface FileContentErrorPayload {
   code?: string;
@@ -19,6 +20,7 @@ export interface WorkbenchLayoutClasses {
 
 export interface LoadingOverlayClasses {
   globalOverlay: string;
+  mainAreaOverlay: string;
   workspaceOverlay: string;
   panel: string;
 }
@@ -42,6 +44,29 @@ export interface FileTreeNode {
   children: FileTreeNode[];
 }
 
+export interface WorkbenchTabDefinition {
+  key: WorkbenchTabKey;
+  label: string;
+}
+
+export interface FileTreeTableInput {
+  id: string;
+  path: string;
+  file_type: string | null;
+  change_type: string | null;
+  size: number | null;
+  last_modified_at: string | null;
+}
+
+export interface FileTreeTableRow<T extends FileTreeTableInput> {
+  id: string;
+  path: string;
+  name: string;
+  kind: "directory" | "file";
+  depth: number;
+  file: T | null;
+}
+
 export interface AgentDisplayStateInput {
   runStatus: string;
   currentStep: string | null;
@@ -51,16 +76,16 @@ export interface AgentDisplayStateInput {
   activeAgentNames?: string[];
 }
 
-export interface ReasoningEventInput {
-  agent_name: string | null;
-  event_type: string;
-  message: string | null;
-  created_at: string;
-}
-
 export interface AgentProgressEventInput {
   agent_name: string | null;
   event_type: string;
+}
+
+export interface AgentDurationEventInput {
+  agent_name: string | null;
+  event_type: string;
+  step?: string | null;
+  created_at: string;
 }
 
 export interface AgentEventProgress {
@@ -68,9 +93,27 @@ export interface AgentEventProgress {
   activeAgentNames: string[];
 }
 
-export interface AgentReasoningEvent {
-  agentName: string;
-  message: string;
+export interface TaskDisplayInput {
+  id: string;
+  status: string;
+  sort_order: number;
+  created_at: string;
+}
+
+export interface TaskDisplayItem<T extends TaskDisplayInput> {
+  task: T;
+  displayStatus: DisplayProgressStatus;
+}
+
+export interface RunEventMergeInput {
+  id: string;
+  created_at: string;
+}
+
+export function stripOuterMarkdownFence(text: string): string {
+  const trimmed = text.trim();
+  const fenced = trimmed.match(/^```(?:markdown|md)?[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*$/i);
+  return (fenced?.[1] ?? trimmed).trim();
 }
 
 const ERROR_LABELS: Record<string, string> = {
@@ -81,8 +124,99 @@ const ERROR_LABELS: Record<string, string> = {
   invalid_file_path: "Invalid file path"
 };
 
+const STATUS_LABELS: Record<string, string> = {
+  draft: "草稿",
+  planning: "规划中",
+  planning_queued: "等待规划",
+  planning_running: "规划中",
+  pending: "等待中",
+  pending_approval: "待批准",
+  plan_ready: "计划已生成",
+  approved: "已批准",
+  approved_waiting_for_sandbox: "等待沙箱启动",
+  running: "运行中",
+  succeeded: "已完成",
+  failed: "失败",
+  failed_retryable: "可重试",
+  not_ready: "未就绪",
+  creating: "创建中",
+  ready: "就绪",
+  generating: "生成中",
+  installing: "安装中",
+  building: "构建中",
+  fixing: "修复中",
+  previewing: "预览中",
+  stopped: "已停止"
+};
+
 export function getDashboardHref(): string {
   return "/dashboard";
+}
+
+export function shouldEnsurePreviewServer(params: {
+  activeTab: string;
+  previewUrl: string | null | undefined;
+  inFlight?: boolean;
+  lastAttemptAt?: number | null;
+  now?: number;
+  cooldownMs?: number;
+}): boolean {
+  if (params.activeTab !== "preview" || !params.previewUrl || params.inFlight) {
+    return false;
+  }
+
+  const lastAttemptAt = params.lastAttemptAt ?? null;
+  if (lastAttemptAt === null) {
+    return true;
+  }
+
+  const now = params.now ?? Date.now();
+  const cooldownMs = params.cooldownMs ?? 60_000;
+  return now - lastAttemptAt >= cooldownMs;
+}
+
+export function getWorkbenchTabs(): WorkbenchTabDefinition[] {
+  return [
+    { key: "plan", label: "概览" },
+    { key: "preview", label: "应用预览器" },
+    { key: "editor", label: "编辑器" },
+    { key: "terminal", label: "终端" },
+    { key: "files", label: "文件" }
+  ];
+}
+
+export function getLatestRunEventCursor(events: RunEventMergeInput[]): string | null {
+  return events.reduce<string | null>((latest, event) => {
+    if (!latest || event.created_at > latest) {
+      return event.created_at;
+    }
+
+    return latest;
+  }, null);
+}
+
+export function mergeRunEvents<T extends RunEventMergeInput>(currentEvents: T[], incomingEvents: T[]): T[] {
+  const eventsById = new Map<string, T>();
+
+  for (const event of currentEvents) {
+    eventsById.set(event.id, event);
+  }
+
+  for (const event of incomingEvents) {
+    eventsById.set(event.id, event);
+  }
+
+  return [...eventsById.values()].sort((a, b) => {
+    const createdAtDelta = a.created_at.localeCompare(b.created_at);
+    if (createdAtDelta !== 0) return createdAtDelta;
+
+    return a.id.localeCompare(b.id);
+  });
+}
+
+export function getLocalizedStatusLabel(status: string | null | undefined): string {
+  if (!status) return STATUS_LABELS.not_ready;
+  return STATUS_LABELS[status] ?? status;
 }
 
 export function getRunControls(runStatus: string, sandboxStatus: string | null): { primaryAction: PrimaryRunAction; label: string } {
@@ -124,6 +258,7 @@ export function getWorkbenchLayoutClasses(): WorkbenchLayoutClasses {
 export function getLoadingOverlayClasses(): LoadingOverlayClasses {
   return {
     globalOverlay: "fixed inset-0 z-50 flex items-center justify-center bg-white/55 backdrop-blur-md",
+    mainAreaOverlay: "fixed inset-y-0 left-64 right-0 z-50 flex items-center justify-center bg-white/55 backdrop-blur-md",
     workspaceOverlay: "absolute inset-0 z-30 flex items-center justify-center bg-white/55 backdrop-blur-md",
     panel: "flex items-center gap-3 rounded-lg border border-border bg-white/85 px-4 py-3 text-sm font-semibold text-slate-700 shadow-soft"
   };
@@ -200,6 +335,37 @@ export function buildFileTree(paths: string[]): FileTreeNode {
   return root;
 }
 
+function flattenFileTreeTableRows<T extends FileTreeTableInput>(
+  nodes: FileTreeNode[],
+  fileByPath: Map<string, T>,
+  depth: number,
+  rows: Array<FileTreeTableRow<T>>
+) {
+  for (const node of nodes) {
+    const file = node.type === "file" ? fileByPath.get(node.path) ?? null : null;
+    rows.push({
+      id: node.type === "directory" ? `dir:${node.path}` : file?.id ?? `file:${node.path}`,
+      path: node.path,
+      name: node.name,
+      kind: node.type === "directory" ? "directory" : "file",
+      depth,
+      file
+    });
+
+    if (node.type === "directory") {
+      flattenFileTreeTableRows(node.children, fileByPath, depth + 1, rows);
+    }
+  }
+}
+
+export function getFileTreeTableRows<T extends FileTreeTableInput>(files: T[]): Array<FileTreeTableRow<T>> {
+  const fileByPath = new Map(files.map((file) => [file.path, file]));
+  const tree = buildFileTree(files.map((file) => file.path));
+  const rows: Array<FileTreeTableRow<T>> = [];
+  flattenFileTreeTableRows(tree.children, fileByPath, 0, rows);
+  return rows;
+}
+
 export function getExpandedDirectorySet(filePath: string): Set<string> {
   const segments = filePath.split("/").filter(Boolean);
   const expanded = new Set<string>();
@@ -223,6 +389,29 @@ export function getTaskDisplayStatus(taskStatus: string, runStatus: string, sand
   }
 
   return "todo";
+}
+
+const TASK_STATUS_ORDER: Record<DisplayProgressStatus, number> = {
+  done: 0,
+  in_progress: 1,
+  todo: 2
+};
+
+export function getTaskDisplayItems<T extends TaskDisplayInput>(tasks: T[], runStatus: string, sandboxStatus: string | null): Array<TaskDisplayItem<T>> {
+  return tasks
+    .map((task) => ({
+      task,
+      displayStatus: getTaskDisplayStatus(task.status, runStatus, sandboxStatus)
+    }))
+    .sort((a, b) => {
+      const statusDelta = TASK_STATUS_ORDER[a.displayStatus] - TASK_STATUS_ORDER[b.displayStatus];
+      if (statusDelta !== 0) return statusDelta;
+
+      const sortDelta = a.task.sort_order - b.task.sort_order;
+      if (sortDelta !== 0) return sortDelta;
+
+      return a.task.created_at.localeCompare(b.task.created_at);
+    });
 }
 
 export function getAgentDisplayStates(input: AgentDisplayStateInput): Record<AgentDisplayName, DisplayProgressStatus> {
@@ -272,14 +461,115 @@ export function getAgentEventProgress(events: AgentProgressEventInput[]): AgentE
   };
 }
 
-export function getAgentReasoningEvents(events: ReasoningEventInput[], limit = 4): AgentReasoningEvent[] {
-  return events
-    .filter((event) => event.event_type === "agent.reasoning" && Boolean(event.agent_name) && Boolean(event.message))
-    .slice(-limit)
-    .map((event) => ({
-      agentName: String(event.agent_name),
-      message: String(event.message)
-    }));
+function formatDuration(milliseconds: number): string {
+  const safeMilliseconds = Math.max(0, milliseconds);
+
+  if (safeMilliseconds > 0 && safeMilliseconds < 1000) {
+    return "<1秒";
+  }
+
+  if (safeMilliseconds < 10_000) {
+    const seconds = safeMilliseconds / 1000;
+    return `${Number.isInteger(seconds) ? seconds.toFixed(0) : seconds.toFixed(1)}秒`;
+  }
+
+  const totalSeconds = Math.round(safeMilliseconds / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  if (minutes > 0) {
+    return `${minutes}分${String(seconds).padStart(2, "0")}秒`;
+  }
+
+  return `${seconds}秒`;
+}
+
+function setEarliestTimestamp(timestamps: Map<string, number>, key: string, timestamp: number) {
+  const current = timestamps.get(key);
+  if (current === undefined || timestamp < current) {
+    timestamps.set(key, timestamp);
+  }
+}
+
+function setLatestTimestamp(timestamps: Map<string, number>, key: string, timestamp: number) {
+  const current = timestamps.get(key);
+  if (current === undefined || timestamp > current) {
+    timestamps.set(key, timestamp);
+  }
+}
+
+export function getAgentDurationLabels(
+  events: AgentDurationEventInput[],
+  nowIso = new Date().toISOString()
+): Partial<Record<AgentDisplayName, string>> {
+  const now = new Date(nowIso).getTime();
+  const startedAt = new Map<string, number>();
+  const completedAt = new Map<string, number>();
+
+  for (const event of events) {
+    const timestamp = new Date(event.created_at).getTime();
+    if (!Number.isFinite(timestamp)) continue;
+    const step = event.step ?? "";
+
+    if (event.agent_name && event.event_type === "agent.started") {
+      setEarliestTimestamp(startedAt, event.agent_name, timestamp);
+    }
+
+    if (event.agent_name && event.event_type === "agent.completed") {
+      setLatestTimestamp(completedAt, event.agent_name, timestamp);
+    }
+
+    if (step === "opencode_run" && event.event_type === "sandbox.command.started") {
+      setEarliestTimestamp(startedAt, "CodingAgent", timestamp);
+    }
+
+    if (step === "opencode_run" && event.event_type === "sandbox.command.finished") {
+      setLatestTimestamp(completedAt, "CodingAgent", timestamp);
+    }
+
+    if ((step === "install" || step === "build" || step === "build_retry" || step === "opencode_fix") && event.event_type === "sandbox.command.started") {
+      setEarliestTimestamp(startedAt, "BuildAgent", timestamp);
+    }
+
+    if (
+      (step === "install" || step === "build" || step === "build_retry" || step === "opencode_fix") &&
+      event.event_type === "sandbox.command.finished"
+    ) {
+      setLatestTimestamp(completedAt, "BuildAgent", timestamp);
+    }
+
+    if (event.event_type === "build.started") {
+      setEarliestTimestamp(startedAt, "BuildAgent", timestamp);
+    }
+
+    if (event.event_type === "build.succeeded" || event.event_type === "build.failed") {
+      setLatestTimestamp(completedAt, "BuildAgent", timestamp);
+    }
+
+    if (event.event_type === "review.screenshot.started") {
+      setEarliestTimestamp(startedAt, "ReviewerAgent", timestamp);
+    }
+
+    if (event.event_type === "artifact.created" && step === "review_report") {
+      setLatestTimestamp(completedAt, "ReviewerAgent", timestamp);
+    }
+  }
+
+  if (!startedAt.has("ReviewerAgent")) {
+    const buildCompletedAt = completedAt.get("BuildAgent");
+    const reviewerCompletedAt = completedAt.get("ReviewerAgent");
+    if (buildCompletedAt !== undefined && reviewerCompletedAt !== undefined) {
+      startedAt.set("ReviewerAgent", buildCompletedAt);
+    }
+  }
+
+  const labels: Partial<Record<AgentDisplayName, string>> = {};
+  startedAt.forEach((start, agentName) => {
+    const end = completedAt.get(agentName) ?? now;
+    labels[agentName as AgentDisplayName] = formatDuration(end - start);
+  });
+
+  return labels;
 }
 
 export function getFileContentErrorLabel(payload: FileContentErrorPayload): string {

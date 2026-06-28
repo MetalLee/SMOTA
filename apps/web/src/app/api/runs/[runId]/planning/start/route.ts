@@ -135,7 +135,7 @@ export async function POST(_request: Request, { params }: { params: Promise<{ ru
       ...bundle.events.map((event) => insertEvent(supabase, context, event)),
       insertEvent(supabase, context, {
         agentName: "PlannerAgent",
-        eventType: "agent.reasoning",
+        eventType: "agent.completed",
         step: "llm_fallback",
         message,
         stream: "stderr",
