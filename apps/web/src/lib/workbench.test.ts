@@ -17,6 +17,8 @@ import {
   getAgentEventProgress,
   getTaskDisplayItems,
   shouldEnsurePreviewServer,
+  selectVisibleWorkspaceFiles,
+  shouldReloadRunEvents,
   stripOuterMarkdownFence,
   mergeRunEvents,
   getRunControls,
@@ -64,21 +66,49 @@ describe("workbench helpers", () => {
     expect(classes.content).toContain("overflow-y-auto");
   });
 
-  it("pins project detail actions below a scrollable agent panel summary", () => {
+  it("pins project detail actions below a hover-scrollable agent panel summary", () => {
     const classes = getWorkbenchLayoutClasses();
 
     expect(classes.agentPanel).toContain("min-h-0");
     expect(classes.agentPanelSummary).toContain("overflow-y-auto");
+    expect(classes.agentPanelSummary).toContain("agent-sidebar-scroll");
     expect(classes.agentPanelSummary).toContain("flex-1");
     expect(classes.agentPanelActions).toContain("shrink-0");
     expect(classes.agentPanelActions).toContain("border-t");
   });
 
-  it("derives running and completed task checklist display status from run progress", () => {
-    expect(getTaskDisplayStatus("todo", "running", "building")).toBe("in_progress");
+  it("keeps future plan tasks waiting until their own task status becomes active", () => {
+    expect(getTaskDisplayStatus("todo", "running", "building")).toBe("todo");
     expect(getTaskDisplayStatus("in_progress", "running", "building")).toBe("in_progress");
     expect(getTaskDisplayStatus("todo", "succeeded", "previewing")).toBe("done");
     expect(getTaskDisplayStatus("done", "running", "building")).toBe("done");
+  });
+
+  it("surfaces the first unfinished plan task while CodingAgent is running", () => {
+    expect(
+      getTaskDisplayItems(
+        [
+          { id: "done", title: "确认目标", description: null, status: "done", sort_order: 0, created_at: "2026-06-28T00:00:00.000Z" },
+          { id: "active", title: "实现页面", description: null, status: "todo", sort_order: 1, created_at: "2026-06-28T00:00:01.000Z" },
+          { id: "waiting", title: "补充动效", description: null, status: "todo", sort_order: 2, created_at: "2026-06-28T00:00:02.000Z" }
+        ],
+        "running",
+        "generating",
+        "running_opencode"
+      ).map((item) => `${item.displayStatus}:${item.task.id}`)
+    ).toEqual(["done:done", "in_progress:active", "todo:waiting"]);
+
+    expect(
+      getTaskDisplayItems(
+        [
+          { id: "first", title: "实现页面", description: null, status: "todo", sort_order: 1, created_at: "2026-06-28T00:00:01.000Z" },
+          { id: "second", title: "补充动效", description: null, status: "todo", sort_order: 2, created_at: "2026-06-28T00:00:02.000Z" }
+        ],
+        "pending_approval",
+        "ready",
+        "plan_ready"
+      ).map((item) => `${item.displayStatus}:${item.task.id}`)
+    ).toEqual(["todo:first", "todo:second"]);
   });
 
   it("derives agent display states from persisted events and sandbox progress", () => {
@@ -135,6 +165,18 @@ describe("workbench helpers", () => {
 
   it("uses dashboard as the workbench brand destination", () => {
     expect(getDashboardHref()).toBe("/dashboard");
+  });
+
+  it("keeps CodingAgent waiting before the user approves the plan", () => {
+    expect(
+      getAgentDisplayStates({
+        runStatus: "pending_approval",
+        currentStep: "plan_ready",
+        sandboxStatus: "ready",
+        buildStatus: null,
+        eventAgentNames: ["ProductAgent", "ArchitectAgent", "PlannerAgent"]
+      }).CodingAgent
+    ).toBe("todo");
   });
 
   it("throttles automatic Sandbox preview recovery checks while the preview tab has a URL", () => {
@@ -214,6 +256,17 @@ describe("workbench helpers", () => {
     expect(rows.find((row) => row.path === "src")?.file).toBeNull();
   });
 
+  it("deduplicates workspace files and prefers the current run once it has indexed files", () => {
+    const files = [
+      { id: "old-app", run_id: "run-old", path: "src/App.tsx", updated_at: "2026-06-27T10:00:00.000Z" },
+      { id: "new-app", run_id: "run-new", path: "src/App.tsx", updated_at: "2026-06-28T10:00:00.000Z" },
+      { id: "old-package", run_id: "run-old", path: "package.json", updated_at: "2026-06-27T10:00:00.000Z" }
+    ];
+
+    expect(selectVisibleWorkspaceFiles(files, "run-new").map((file) => file.id)).toEqual(["new-app"]);
+    expect(selectVisibleWorkspaceFiles(files, "run-empty").map((file) => file.id)).toEqual(["old-package", "new-app"]);
+  });
+
   it("merges polled run events without dropping earlier timeline context", () => {
     const initialEvents = [
       { id: "event-2", created_at: "2026-06-28T00:00:02.000Z", event_type: "sandbox.command.started" },
@@ -228,6 +281,11 @@ describe("workbench helpers", () => {
 
     expect(mergedEvents.map((event) => event.id)).toEqual(["event-1", "event-2", "event-3"]);
     expect(getLatestRunEventCursor(mergedEvents)).toBe("2026-06-28T00:00:03.000Z");
+  });
+
+  it("reloads run-scoped events when the workspace switches to a new run", () => {
+    expect(shouldReloadRunEvents("run-old", "run-new")).toBe(true);
+    expect(shouldReloadRunEvents("run-current", "run-current")).toBe(false);
   });
 
   it("localizes run and sandbox status labels for the sidebar", () => {

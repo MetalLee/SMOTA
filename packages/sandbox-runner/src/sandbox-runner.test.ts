@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildCodingAgentPrompt,
+  buildContinuationCodingAgentPrompt,
   buildGitSetupShellCommand,
   buildOpenCodeConfig,
   buildOpenCodeRunShellCommand,
@@ -130,6 +131,23 @@ describe("sandbox runner helpers", () => {
     expect(prompt).toContain("PROJECT_BRIEF.md");
     expect(prompt).toContain("All generated application code must stay inside /workspace.");
     expect(prompt).toContain("简体中文");
+  });
+
+  it("builds a continuation CodingAgent prompt for cloned workspaces", () => {
+    const prompt = buildContinuationCodingAgentPrompt({
+      originalProjectPrompt: "克隆来的销售看板",
+      changePrompt: "增加负责人筛选器",
+      sourceKind: "cloned_workspace",
+      tasks: [{ title: "实现筛选器", description: "保持现有风格" }],
+      artifacts: [{ path: "ROADMAP.md", content: "# 路线图\n增量修改" }],
+      workspaceFiles: ["package.json", "src/App.tsx"]
+    });
+
+    expect(prompt).toContain("当前 /workspace 已经存在项目文件");
+    expect(prompt).toContain("克隆来的已有应用");
+    expect(prompt).toContain("增加负责人筛选器");
+    expect(prompt).toContain("不要重新初始化、重建或覆盖整个项目");
+    expect(prompt).toContain("src/App.tsx");
   });
 
   it("builds OpenCode run commands for the DeepSeek v4 Pro build agent", () => {

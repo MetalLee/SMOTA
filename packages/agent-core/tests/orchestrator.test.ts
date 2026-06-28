@@ -164,6 +164,54 @@ describe("agent orchestrator", () => {
     ]);
   });
 
+  it("generates continuation harness artifacts from an existing cloned workspace", async () => {
+    const prompts: string[] = [];
+    const provider = createScriptedProvider([
+      JSON.stringify({
+        projectName: "克隆看板改造",
+        projectBrief: "# 项目简介\n\n## 本次修改目标\n给克隆来的看板增加筛选器",
+        tasks: [{ title: "确认本次修改目标", description: "基于已有文件增量修改", status: "done" }]
+      }),
+      JSON.stringify({
+        architecture: "# 架构\n\n## 增量影响\n复用现有 React 结构",
+        codexRules: "# CODEX 任务规则\n\n## 修改规则\n不要重建项目"
+      }),
+      JSON.stringify({
+        roadmap: "# 路线图\n\n## 本次迭代\n增加筛选器",
+        agents: "# AGENTS\n\n## CodingAgent\n基于当前 /workspace 修改",
+        tasks: [{ title: "实现筛选器", description: "保持现有风格", status: "todo" }]
+      })
+    ]);
+    const originalGenerateText = provider.generateText;
+    provider.generateText = async (input) => {
+      prompts.push(input.prompt);
+      return originalGenerateText(input);
+    };
+
+    const bundle = await createAgentOrchestrator({ llm: provider }).generateContinuationHarnessBundle({
+      originalPrompt: "克隆来的销售看板",
+      changePrompt: "增加按负责人筛选",
+      mode: "plan-first",
+      appType: "Admin",
+      sourceKind: "cloned_workspace",
+      previousArtifacts: [{ path: "PROJECT_BRIEF.md", content: "# 旧项目简介\n销售看板" }],
+      workspaceFiles: ["package.json", "src/App.tsx"]
+    });
+
+    expect(bundle.artifacts.map((artifact) => artifact.path)).toEqual([
+      "PROJECT_BRIEF.md",
+      "ARCHITECTURE.md",
+      "CODEX_TASK_RULES.md",
+      "ROADMAP.md",
+      "AGENTS.md"
+    ]);
+    expect(bundle.tasks.map((task) => task.title)).toEqual(["确认本次修改目标", "实现筛选器"]);
+    expect(prompts.join("\n")).toContain("增加按负责人筛选");
+    expect(prompts.join("\n")).toContain("克隆来的已有应用");
+    expect(prompts.join("\n")).toContain("不要从空项目重新生成");
+    expect(prompts.join("\n")).toContain("src/App.tsx");
+  });
+
   it("reindexes generated tasks in agent execution order when model sort orders are noisy", async () => {
     const provider = createScriptedProvider([
       JSON.stringify({

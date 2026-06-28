@@ -1,10 +1,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { SIMPLIFIED_CHINESE_OUTPUT_INSTRUCTION, createReviewerAgent, fallbackReviewReport } from "@smota/agent-core";
-import { buildSandboxName, buildSandboxRuntimeConfig, createSupabaseServiceClient, createVercelSandbox } from "./sandbox-client";
+import { buildSandboxName, buildSandboxRuntimeConfig, createSupabaseServiceClient, createVercelSandbox, getVercelSandbox } from "./sandbox-client";
 import { commandOutput, runSandboxCommand, startDetachedSandboxCommand } from "./sandbox-commands";
 import { ensureWorkspace, scanWorkspaceFiles, writeHarnessArtifacts, WORKSPACE_DIR } from "./sandbox-files";
 import { insertRunEvent, updateRunStatus, type RunContext } from "./sandbox-events";
 import { getSandboxPreviewUrl } from "./sandbox-preview";
+import { ensureSandboxPreviewServer } from "./sandbox-preview-server";
 import {
   buildPreviewScreenshotObjectPath,
   buildSandboxPreviewScreenshotCommand,
@@ -119,6 +120,41 @@ export function buildViteDevServerArgs(port: number): string[] {
   return ["dev", "--config", "smota.vite.config.ts", "--host", "0.0.0.0", "--port", String(port), "--strictPort"];
 }
 
+export function buildContinuationCodingAgentPrompt(input: {
+  originalProjectPrompt: string;
+  changePrompt: string;
+  sourceKind: "own_previous_run" | "cloned_workspace";
+  tasks: Array<{ title: string; description: string | null }>;
+  artifacts: Array<{ path: string; content: string }>;
+  workspaceFiles: string[];
+}) {
+  const sourceLabel = input.sourceKind === "cloned_workspace" ? "克隆来的已有应用" : "上一轮已生成应用";
+  const taskLines = input.tasks.map((task, index) => `${index + 1}. ${task.title}${task.description ? `\n   ${task.description}` : ""}`);
+  const artifactSections = input.artifacts.map((artifact) => `## ${artifact.path}\n\n${artifact.content}`);
+  const fileLines = input.workspaceFiles.length ? input.workspaceFiles.map((path) => `- ${path}`).join("\n") : "- 暂无文件索引，请先查看 /workspace";
+
+  return [
+    "You are the CodingAgent for SMOTA.",
+    SIMPLIFIED_CHINESE_OUTPUT_INSTRUCTION,
+    "当前 /workspace 已经存在项目文件。请先阅读现有代码，再进行增量修改。",
+    `当前项目来源：${sourceLabel}。`,
+    "不要重新初始化、重建或覆盖整个项目；不要删除与本次需求无关的文件。",
+    "All generated application code must stay inside /workspace.",
+    "",
+    `Original project request: ${input.originalProjectPrompt}`,
+    `Current change request: ${input.changePrompt}`,
+    "",
+    "Current workspace files:",
+    fileLines,
+    "",
+    "Approved incremental tasks:",
+    taskLines.join("\n"),
+    "",
+    "Current run Harness artifacts:",
+    artifactSections.join("\n\n---\n\n")
+  ].join("\n");
+}
+
 export function buildRealtimeSandboxPhasePlan() {
   return {
     fileScanPhases: ["harness_written", "init_vite", "preview_ready", "opencode_run", "install_after_opencode", "build"],
@@ -169,19 +205,21 @@ export async function runVercelSandboxWorkflow(runId: string, options: WorkflowO
   const codingAgentEnv = buildSandboxCodingAgentEnvironment(env);
   const opencodeCommand = env.OPENCODE_CLI_COMMAND ?? "opencode";
   const opencodeModel = buildOpenCodeModel(env);
-  const sandboxName = buildSandboxName({ ownerId: run.owner_id, projectId: run.project_id, runId: run.id });
+  const existingSandboxName = typeof run.sandbox_name === "string" && run.sandbox_name.trim() ? run.sandbox_name.trim() : null;
+  const reuseExistingWorkspace = Boolean(existingSandboxName);
+  const sandboxName = existingSandboxName ?? buildSandboxName({ ownerId: run.owner_id, projectId: run.project_id, runId: run.id });
 
   try {
     await updateRunStatus(supabase, context, {
       status: "running",
       sandbox_name: sandboxName,
-      sandbox_status: "creating",
+      sandbox_status: reuseExistingWorkspace ? "ready" : "creating",
       sandbox_runtime: config.runtime,
       sandbox_timeout_ms: config.timeoutMs,
-      current_step: "creating_sandbox"
+      current_step: reuseExistingWorkspace ? "reusing_sandbox_workspace" : "creating_sandbox"
     });
 
-    const sandbox = await createVercelSandbox({ name: sandboxName, config, env });
+    const sandbox = reuseExistingWorkspace ? await getVercelSandbox(sandboxName) : await createVercelSandbox({ name: sandboxName, config, env });
     await upsertSandboxRun(supabase, context,
       {
         owner_id: context.ownerId,
@@ -196,23 +234,35 @@ export async function runVercelSandboxWorkflow(runId: string, options: WorkflowO
       }
     );
     await updateRunStatus(supabase, context, { sandbox_status: "ready", current_step: "sandbox_ready" });
-    await insertRunEvent(supabase, context, {
-      eventType: "sandbox.created",
-      step: "create_sandbox",
-      message: `Created Vercel Sandbox ${sandboxName}.`,
-      payload: { sandboxName, runtime: config.runtime, publishPort: config.publishPort }
-    });
+    await insertRunEvent(
+      supabase,
+      context,
+      reuseExistingWorkspace
+        ? {
+            eventType: "sandbox.reused",
+            step: "reuse_sandbox",
+            message: `Reused existing Vercel Sandbox ${sandboxName}.`,
+            payload: { sandboxName, runtime: config.runtime, publishPort: config.publishPort }
+          }
+        : {
+            eventType: "sandbox.created",
+            step: "create_sandbox",
+            message: `Created Vercel Sandbox ${sandboxName}.`,
+            payload: { sandboxName, runtime: config.runtime, publishPort: config.publishPort }
+          }
+    );
 
     await ensureWorkspace(sandbox);
 
-    const [{ data: artifacts }, { data: tasks }] = await Promise.all([
+    const [{ data: artifacts }, { data: tasks }, { data: workspaceFiles }] = await Promise.all([
       supabase
         .from("artifacts")
         .select("path, content")
         .eq("run_id", run.id)
         .eq("owner_id", run.owner_id)
         .in("path", HARNESS_PATHS),
-      supabase.from("tasks").select("title, description").eq("run_id", run.id).eq("owner_id", run.owner_id).order("sort_order")
+      supabase.from("tasks").select("title, description").eq("run_id", run.id).eq("owner_id", run.owner_id).order("sort_order"),
+      supabase.from("workspace_files").select("path").eq("project_id", run.project_id).eq("owner_id", run.owner_id).order("path", { ascending: true })
     ]);
 
     const harnessArtifacts = HARNESS_PATHS.map((path) => {
@@ -227,16 +277,18 @@ export async function runVercelSandboxWorkflow(runId: string, options: WorkflowO
     await writeHarnessArtifacts(sandbox, harnessArtifacts);
     await scanWorkspaceFiles({ sandbox, supabase, context, phase: "harness_written" });
 
-    await runSandboxCommand({
-      supabase,
-      context,
-      sandbox,
-      step: "init_vite",
-      cmd: "bash",
-      args: ["-lc", "tmpdir=$(mktemp -d) && cd \"$tmpdir\" && npm create vite@latest app -- --template react-ts && cp -a app/. /workspace && rm -rf \"$tmpdir\""],
-      timeoutMs: 10 * 60 * 1000
-    });
-    await scanWorkspaceFiles({ sandbox, supabase, context, phase: "init_vite" });
+    if (!reuseExistingWorkspace) {
+      await runSandboxCommand({
+        supabase,
+        context,
+        sandbox,
+        step: "init_vite",
+        cmd: "bash",
+        args: ["-lc", "tmpdir=$(mktemp -d) && cd \"$tmpdir\" && npm create vite@latest app -- --template react-ts && cp -a app/. /workspace && rm -rf \"$tmpdir\""],
+        timeoutMs: 10 * 60 * 1000
+      });
+      await scanWorkspaceFiles({ sandbox, supabase, context, phase: "init_vite" });
+    }
 
     await runSandboxCommand({
       supabase,
@@ -250,8 +302,10 @@ export async function runVercelSandboxWorkflow(runId: string, options: WorkflowO
     });
 
     await runSandboxCommand({ supabase, context, sandbox, step: "corepack", cmd: "corepack", args: ["enable"], cwd: WORKSPACE_DIR });
-    await updateRunStatus(supabase, context, { current_step: "installing_initial", sandbox_status: "installing" });
-    await runSandboxCommand({ supabase, context, sandbox, step: "install_initial", cmd: "pnpm", args: ["install"], cwd: WORKSPACE_DIR, timeoutMs: 20 * 60 * 1000 });
+    if (!reuseExistingWorkspace) {
+      await updateRunStatus(supabase, context, { current_step: "installing_initial", sandbox_status: "installing" });
+      await runSandboxCommand({ supabase, context, sandbox, step: "install_initial", cmd: "pnpm", args: ["install"], cwd: WORKSPACE_DIR, timeoutMs: 20 * 60 * 1000 });
+    }
 
     await sandbox.writeFiles([
       {
@@ -261,16 +315,20 @@ export async function runVercelSandboxWorkflow(runId: string, options: WorkflowO
     ]);
 
     await updateRunStatus(supabase, context, { current_step: "starting_preview", sandbox_status: "previewing" });
-    await startDetachedSandboxCommand({
-      supabase,
-      context,
-      sandbox,
-      step: "dev_server",
-      cmd: "pnpm",
-      args: buildViteDevServerArgs(config.publishPort),
-      cwd: WORKSPACE_DIR,
-      timeoutMs: config.timeoutMs
-    });
+    if (reuseExistingWorkspace) {
+      await ensureSandboxPreviewServer({ supabase, context, sandbox, port: config.publishPort });
+    } else {
+      await startDetachedSandboxCommand({
+        supabase,
+        context,
+        sandbox,
+        step: "dev_server",
+        cmd: "pnpm",
+        args: buildViteDevServerArgs(config.publishPort),
+        cwd: WORKSPACE_DIR,
+        timeoutMs: config.timeoutMs
+      });
+    }
 
     const previewUrl = getSandboxPreviewUrl(sandbox, config.publishPort);
     await updateRunStatus(supabase, context, { current_step: "preview_ready", sandbox_preview_url: previewUrl, sandbox_status: "previewing" });
@@ -329,11 +387,20 @@ export async function runVercelSandboxWorkflow(runId: string, options: WorkflowO
       }
     ]);
 
-    const taskPrompt = buildCodingAgentPrompt({
-      projectPrompt: project.prompt ?? run.user_prompt,
-      tasks: tasks ?? [],
-      artifacts: harnessArtifacts
-    });
+    const taskPrompt = reuseExistingWorkspace
+      ? buildContinuationCodingAgentPrompt({
+          originalProjectPrompt: project.prompt ?? project.description ?? "",
+          changePrompt: run.user_prompt,
+          sourceKind: project.source_project_id ? "cloned_workspace" : "own_previous_run",
+          tasks: tasks ?? [],
+          artifacts: harnessArtifacts,
+          workspaceFiles: (workspaceFiles ?? []).map((file: { path: string }) => file.path)
+        })
+      : buildCodingAgentPrompt({
+          projectPrompt: project.prompt ?? run.user_prompt,
+          tasks: tasks ?? [],
+          artifacts: harnessArtifacts
+        });
 
     await updateRunStatus(supabase, context, { current_step: "running_opencode", sandbox_status: "generating" });
     const opencodeRun = await runSandboxCommand({

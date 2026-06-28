@@ -5,7 +5,8 @@ import { Card } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/input";
 
 const examples = [
-  "为宠物诊所创建预约管理后台",
+  "开发一个简单的贪吃蛇游戏",
+  "为在线多人游戏创建管理后台",
   "做一个面向设计师的作品集 Landing Page",
   "创建 SaaS Demo，用于管理客户线索和跟进任务"
 ];

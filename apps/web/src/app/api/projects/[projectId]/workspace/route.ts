@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { selectVisibleWorkspaceFiles } from "@/lib/workbench";
 import { createClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -62,7 +63,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ pro
     run,
     tasks: tasks ?? [],
     artifacts: artifacts ?? [],
-    files: files ?? [],
+    files: selectVisibleWorkspaceFiles(files ?? [], run.id),
     sandboxRun
   });
 }

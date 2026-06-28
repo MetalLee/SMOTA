@@ -49,7 +49,7 @@ export default async function ResourcePage({ searchParams }: { searchParams: Pro
           ) : (
             <Card className="mt-10 flex min-h-64 items-center justify-center p-8 text-center">
               <div>
-                <div className="text-base font-bold text-ink">模板即将上线</div>
+                <div className="text-base font-bold text-ink">模板列表为空</div>
                 <p className="mt-2 text-sm text-slate-500">这里会用于集中展示可复用模板。</p>
               </div>
             </Card>

@@ -66,3 +66,29 @@ select {
   background: #f8fafc;
   padding: 1rem;
 }
+
+.agent-sidebar-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+.agent-sidebar-scroll:hover {
+  scrollbar-color: #cbd5e1 transparent;
+}
+
+.agent-sidebar-scroll::-webkit-scrollbar {
+  width: 4px;
+}
+
+.agent-sidebar-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.agent-sidebar-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: transparent;
+}
+
+.agent-sidebar-scroll:hover::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+}

@@ -3,7 +3,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
-import { Copy, ExternalLink, Eye, Globe2, Loader2, MoreHorizontal, Trash2 } from "lucide-react";
+import { Copy, ExternalLink, Eye, Globe2, Hammer, Loader2, MoreHorizontal, Trash2 } from "lucide-react";
 import { deleteProjectAction } from "@/app/actions/projects";
 import { RouteLoadingLink } from "@/components/route-loading";
 import { Button } from "@/components/ui/button";
@@ -13,7 +13,7 @@ import {
   getProjectCardMenuClass,
   getProjectCardMenuItems,
   getProjectCardShellClass,
-  getPublishedBadgeClass,
+  getProjectStatusBadgeClass,
   shouldCloseProjectMenuOnPointerDown,
   shouldPlaceProjectMenuAbove,
   type ProjectCardMenuPlacement,
@@ -140,10 +140,10 @@ export function MyProjectCard({ project }: { project: MyProjectCardModel }) {
       </RouteLoadingLink>
 
       <div className={cn("relative min-h-28 p-5", project.showMenu ? "pr-14" : "pr-5")}>
-        {project.showPublishedBadge && project.published ? (
-          <div className={getPublishedBadgeClass()}>
-            <Globe2 className="h-3.5 w-3.5" />
-            已发布
+        {project.statusBadge ? (
+          <div className={getProjectStatusBadgeClass(project.statusBadge)}>
+            {project.statusBadge === "developing" ? <Hammer className="h-3.5 w-3.5" /> : <Globe2 className="h-3.5 w-3.5" />}
+            {project.statusBadge === "developing" ? "开发中" : "已发布"}
           </div>
         ) : null}
 

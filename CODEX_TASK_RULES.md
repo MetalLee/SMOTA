@@ -41,6 +41,8 @@
 - Sandbox 任务必须可恢复。
 - 必须把 run 状态、sandbox name、当前 step 和 step results 持久化到 Supabase。
 - 必须把 stdout/stderr、Agent 状态和构建结果持久化到 `run_events`。
+- 继续开发 Run 必须优先复用当前项目已有 Sandbox 文件；克隆项目即使没有语义上的 parent run，只要存在克隆写入的 workspace 文件索引，也必须按增量修改处理。
+- 复用已有 workspace 时不得重新执行 Vite 初始化，不得覆盖 `/workspace` 中已有应用骨架。
 - Sandbox 恢复后若预览端口未监听，服务端必须通过封装层探测并重启 Vite dev server；预览恢复检查必须有并发保护，且每个 preview URL 最多自动触发一次，避免常规轮询持续创建 Sandbox 命令；健康判断必须以 `127.0.0.1:5173` HTTP 可访问为准，不能用 `pgrep` 之类的进程匹配代替；客户端不能直接调用 Sandbox SDK。
 - 如果构建失败，MVP 只能自动修复一次。
 
@@ -73,6 +75,7 @@
 - 在中文环境下，ProductAgent、ArchitectAgent、PlannerAgent、CodingAgent 和 ReviewerAgent 的用户可见输出必须使用简体中文；技术标识、文件名、命令、代码、API 名称和专有模型名可以保留英文。
 - 模型 `reasoning_content` 不写入 `run_events`，也不在 Web 工作台展示；不要把系统提示词或密钥暴露到前端或 Sandbox。
 - ProductAgent、ArchitectAgent 和 PlannerAgent 生成的 Harness artifact 入库前必须清理外层 Markdown fence（例如 ` ```markdown ` / ` ``` `），但不能破坏文档内部合法代码块。
+- 继续开发 Prompt 必须明确这是已有项目增量修改，包含本次修改提示、已有文件摘要和可用的上一轮 Harness；CodingAgent 不得假设空项目。
 - Sandbox 编排逻辑必须与 UI components 分离。
 - Agent 编排逻辑必须与渲染逻辑分离。
 - 重要状态转换前后都要持久化。

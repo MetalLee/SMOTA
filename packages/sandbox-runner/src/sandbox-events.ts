@@ -5,6 +5,7 @@ export type RunEventType =
   | "step.status"
   | "agent.reasoning"
   | "sandbox.created"
+  | "sandbox.reused"
   | "sandbox.command.started"
   | "sandbox.command.stdout"
   | "sandbox.command.stderr"

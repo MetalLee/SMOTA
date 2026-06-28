@@ -28,6 +28,16 @@ export interface AgentHarnessBundle {
   events: GeneratedRunEvent[];
 }
 
+export interface ContinuationHarnessInput {
+  originalPrompt: string;
+  changePrompt: string;
+  mode: ProjectCreationInput["mode"];
+  appType: ProjectCreationInput["appType"];
+  sourceKind: "own_previous_run" | "cloned_workspace";
+  previousArtifacts: Array<{ path: string; content: string }>;
+  workspaceFiles: string[];
+}
+
 export interface AgentOrchestratorCallbacks {
   onEvent?: (event: GeneratedRunEvent) => Promise<void> | void;
   onProjectName?: (projectName: string) => Promise<void> | void;
@@ -163,6 +173,81 @@ function plannerPrompt(input: ProjectCreationInput, projectBrief: string, archit
   ].join("\n");
 }
 
+function formatPreviousArtifacts(artifacts: Array<{ path: string; content: string }>): string {
+  if (!artifacts.length) {
+    return "上一轮 Harness 文档不可用，请基于项目说明和文件索引生成增量计划。";
+  }
+
+  return artifacts.map((artifact) => `## ${artifact.path}\n\n${artifact.content}`).join("\n\n---\n\n");
+}
+
+function continuationContext(input: ContinuationHarnessInput): string {
+  const sourceLabel = input.sourceKind === "cloned_workspace" ? "克隆来的已有应用" : "用户自己的上一轮已生成应用";
+  return [
+    SIMPLIFIED_CHINESE_OUTPUT_INSTRUCTION,
+    "",
+    `当前场景：${sourceLabel}`,
+    "这是对已有 /workspace 应用的继续开发，不要从空项目重新生成，不要完全覆盖既有方向。",
+    `原始项目需求：${input.originalPrompt}`,
+    `本次用户修改需求：${input.changePrompt}`,
+    `应用类型：${input.appType}`,
+    `模式：${input.mode}`,
+    "",
+    "当前 workspace 文件摘要：",
+    input.workspaceFiles.length ? input.workspaceFiles.map((path) => `- ${path}`).join("\n") : "- 暂无文件索引",
+    "",
+    "上一轮 Harness 文档：",
+    formatPreviousArtifacts(input.previousArtifacts)
+  ].join("\n");
+}
+
+function continuationProductPrompt(input: ContinuationHarnessInput): string {
+  return [
+    continuationContext(input),
+    "",
+    "请输出 JSON：",
+    "{",
+    '  "projectName": "保留或微调后的中文项目名称，12 字以内",',
+    '  "projectBrief": "完整 PROJECT_BRIEF.md Markdown，重点描述本次修改目标、保留的既有产品定位、受影响场景、增量 MVP 范围和不做事项",',
+    '  "tasks": [{"title":"确认本次修改目标","description":"...","status":"done","sortOrder":1}]',
+    "}"
+  ].join("\n");
+}
+
+function continuationArchitectPrompt(input: ContinuationHarnessInput, projectBrief: string): string {
+  return [
+    continuationContext(input),
+    "",
+    "本轮 PROJECT_BRIEF.md:",
+    projectBrief,
+    "",
+    "请输出 JSON：",
+    "{",
+    '  "architecture": "完整 ARCHITECTURE.md Markdown，描述已有架构判断、受影响模块、增量数据流、安全边界和 Sandbox 复用策略",',
+    '  "codexRules": "完整 CODEX_TASK_RULES.md Markdown，强调基于现有文件增量修改、保持风格连续、不要重建项目" ',
+    "}"
+  ].join("\n");
+}
+
+function continuationPlannerPrompt(input: ContinuationHarnessInput, projectBrief: string, architecture: string): string {
+  return [
+    continuationContext(input),
+    "",
+    "本轮 PROJECT_BRIEF.md:",
+    projectBrief,
+    "",
+    "本轮 ARCHITECTURE.md:",
+    architecture,
+    "",
+    "请输出 JSON：",
+    "{",
+    '  "roadmap": "完整 ROADMAP.md Markdown，包含本次增量开发阶段、任务、验收标准、不做事项",',
+    '  "agents": "完整 AGENTS.md Markdown，说明所有 Agent 按已有 workspace 增量开发流程执行",',
+    '  "tasks": [{"title":"实现本次修改","description":"...","status":"todo","sortOrder":4}]',
+    "}"
+  ].join("\n");
+}
+
 export function createAgentOrchestrator(options: { llm?: LlmProvider } = {}) {
   const llm = options.llm ?? createOpenAiCompatibleLlmProvider();
 
@@ -212,6 +297,73 @@ export function createAgentOrchestrator(options: { llm?: LlmProvider } = {}) {
         step: "roadmap",
         system: withSimplifiedChineseOutputInstruction("你是 SMOTA 的 PlannerAgent。只输出 JSON，不要输出解释。"),
         prompt: plannerPrompt(input, product.projectBrief, architect.architecture),
+        events,
+        callbacks
+      });
+      const roadmapArtifact = artifact("Roadmap", "ROADMAP.md", planner.roadmap);
+      const agentsArtifact = artifact("Agents", "AGENTS.md", planner.agents);
+      artifacts.push(roadmapArtifact, agentsArtifact);
+      await callbacks?.onArtifact?.(roadmapArtifact);
+      await callbacks?.onArtifact?.(agentsArtifact);
+      const plannerTasks = normalizeTaskBatch(planner.tasks ?? [], tasks.length + 1);
+      tasks.push(...plannerTasks);
+      if (plannerTasks.length) {
+        await callbacks?.onTasks?.(plannerTasks);
+      }
+
+      return {
+        projectName: product.projectName,
+        artifacts,
+        tasks,
+        events
+      };
+    },
+
+    async generateContinuationHarnessBundle(input: ContinuationHarnessInput, callbacks?: AgentOrchestratorCallbacks): Promise<AgentHarnessBundle> {
+      const events: GeneratedRunEvent[] = [];
+      const artifacts: HarnessArtifact[] = [];
+      const tasks: GeneratedTask[] = [];
+
+      const product = await generateJson<ProductAgentOutput>({
+        llm,
+        agentName: "ProductAgent",
+        step: "product-brief",
+        system: withSimplifiedChineseOutputInstruction("你是 SMOTA 的 ProductAgent。只输出 JSON，不要输出解释。"),
+        prompt: continuationProductPrompt(input),
+        events,
+        callbacks
+      });
+      await callbacks?.onProjectName?.(product.projectName);
+      const productArtifact = artifact("Project Brief", "PROJECT_BRIEF.md", product.projectBrief);
+      artifacts.push(productArtifact);
+      await callbacks?.onArtifact?.(productArtifact);
+      const productTasks = normalizeTaskBatch(product.tasks ?? [], 1);
+      tasks.push(...productTasks);
+      if (productTasks.length) {
+        await callbacks?.onTasks?.(productTasks);
+      }
+
+      const architect = await generateJson<ArchitectAgentOutput>({
+        llm,
+        agentName: "ArchitectAgent",
+        step: "architecture",
+        system: withSimplifiedChineseOutputInstruction("你是 SMOTA 的 ArchitectAgent。只输出 JSON，不要输出解释。"),
+        prompt: continuationArchitectPrompt(input, product.projectBrief),
+        events,
+        callbacks
+      });
+      const architectureArtifact = artifact("Architecture", "ARCHITECTURE.md", architect.architecture);
+      const rulesArtifact = artifact("Codex Task Rules", "CODEX_TASK_RULES.md", architect.codexRules);
+      artifacts.push(architectureArtifact, rulesArtifact);
+      await callbacks?.onArtifact?.(architectureArtifact);
+      await callbacks?.onArtifact?.(rulesArtifact);
+
+      const planner = await generateJson<PlannerAgentOutput>({
+        llm,
+        agentName: "PlannerAgent",
+        step: "roadmap",
+        system: withSimplifiedChineseOutputInstruction("你是 SMOTA 的 PlannerAgent。只输出 JSON，不要输出解释。"),
+        prompt: continuationPlannerPrompt(input, product.projectBrief, architect.architecture),
         events,
         callbacks
       });

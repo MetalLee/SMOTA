@@ -11,3 +11,7 @@ export function shouldAutoStartPlanning(runStatus: string, currentStep: string |
 export function shouldAutoStartSandbox(runStatus: string, currentStep: string | null): boolean {
   return runStatus === "approved" && currentStep === "approved_waiting_for_sandbox";
 }
+
+export function canStartContinuationRun(runStatus: string): boolean {
+  return runStatus === "succeeded" || runStatus === "failed";
+}

@@ -69,6 +69,17 @@ ReviewerAgent 接入真实 LLM。它读取 build result、run events、文件索
 17. ReviewerAgent 生成中文质量检视报告。
 18. Web 工作台展示概览、应用预览器、编辑器、终端和文件；文件 tab 按目录层级以树状表格展示。
 
+## 继续开发流程
+
+1. 当当前 Run 处于已完成或已失败状态时，项目详情页左侧输入框启用。
+2. 用户输入新的修改提示后，平台创建同一项目下的新 AgentRun。
+3. 普通续跑记录 `parent_run_id`；克隆项目即使没有语义父 Run，也会从当前项目最近可用的 Sandbox 和 `workspace_files` 解析已有 workspace。
+4. ProductAgent、ArchitectAgent 和 PlannerAgent 基于原始需求、本次修改提示、已有 Harness 和当前文件索引生成增量计划。
+5. 用户批准计划后，Runner 复用已有持久化 Vercel Sandbox 和 `/workspace`，不重新初始化 Vite，不覆盖现有应用骨架。
+6. CodingAgent 在已有文件基础上执行 OpenCode CLI 增量修改。
+7. BuildAgent 执行安装、构建和一次自动修复。
+8. ReviewerAgent 生成本次继续开发的中文质量检视报告。
+
 ## Agent 状态持久化
 
 每个 Agent 都必须将关键状态转换持久化到 Supabase：

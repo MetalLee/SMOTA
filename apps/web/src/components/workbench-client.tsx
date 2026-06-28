@@ -28,13 +28,13 @@ import {
   UploadCloud,
   XCircle
 } from "lucide-react";
-import { approvePlanAction, updateProjectShareAction } from "@/app/actions/projects";
+import { approvePlanAction, continueProjectAction, updateProjectShareAction } from "@/app/actions/projects";
 import { FileTreeTable } from "@/components/file-tree-table";
 import { PendingButton } from "@/components/pending-button";
 import { LoadingOverlay, RouteLoadingLink, WorkspaceLoadingLink } from "@/components/route-loading";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { shouldAutoStartPlanning, shouldAutoStartSandbox } from "@/lib/project-planning";
+import { canStartContinuationRun, shouldAutoStartPlanning, shouldAutoStartSandbox } from "@/lib/project-planning";
 import { buildProjectShareUrl, getShareActionItems, isProjectShareable } from "@/lib/project-sharing";
 import { cn } from "@/lib/utils";
 import {
@@ -51,6 +51,7 @@ import {
   getLocalizedStatusLabel,
   getWorkbenchTabs,
   mergeRunEvents,
+  shouldReloadRunEvents,
   getRealtimeTabEmptyState,
   getRunControls,
   getTaskDisplayItems,
@@ -123,6 +124,7 @@ export function WorkbenchClient({
   const [workspaceNavigating, setWorkspaceNavigating] = useState(false);
   const [planningStarted, setPlanningStarted] = useState(false);
   const [sandboxAutoStarted, setSandboxAutoStarted] = useState(false);
+  const [continuationSubmitting, setContinuationSubmitting] = useState(false);
   const [, startRefreshTransition] = useTransition();
   const previewRecoveryRef = useRef<{
     previewUrl: string | null;
@@ -142,10 +144,11 @@ export function WorkbenchClient({
   const shareable = isProjectShareable({ runStatus: run.status, sandboxStatus: run.sandbox_status ?? sandboxRun?.status, previewUrl: currentPreviewUrl });
 
   const refreshWorkspace = useCallback(async () => {
+    const requestedRunId = run.id;
     const latestEventCursor = getLatestRunEventCursor(eventsRef.current);
     const eventsUrl = latestEventCursor
-      ? `/api/runs/${run.id}/events?after=${encodeURIComponent(latestEventCursor)}`
-      : `/api/runs/${run.id}/events`;
+      ? `/api/runs/${requestedRunId}/events?after=${encodeURIComponent(latestEventCursor)}`
+      : `/api/runs/${requestedRunId}/events`;
     const previewUrl = run.sandbox_preview_url ?? sandboxRun?.preview_url ?? null;
     const recoveryState = previewRecoveryRef.current;
     if (recoveryState.previewUrl !== previewUrl) {
@@ -194,6 +197,18 @@ export function WorkbenchClient({
       setArtifacts(payload.artifacts);
       setFiles(payload.files);
       setSandboxRun(payload.sandboxRun);
+      if (shouldReloadRunEvents(requestedRunId, payload.run.id)) {
+        const nextEventsResponse = await fetch(`/api/runs/${payload.run.id}/events`, { cache: "no-store" });
+        if (nextEventsResponse.ok) {
+          const nextEventsPayload = (await nextEventsResponse.json()) as { events: RunEventRow[] };
+          eventsRef.current = nextEventsPayload.events;
+          setEvents(nextEventsPayload.events);
+        } else {
+          eventsRef.current = [];
+          setEvents([]);
+        }
+        return;
+      }
     }
 
     if (eventsResponse.ok) {
@@ -221,6 +236,11 @@ export function WorkbenchClient({
     }, 3000);
     return () => window.clearInterval(interval);
   }, [refreshWorkspace]);
+
+  useEffect(() => {
+    setPlanningStarted(false);
+    setSandboxAutoStarted(false);
+  }, [run.id]);
 
   useEffect(() => {
     if (planningStarted || !shouldAutoStartPlanning(run.status, run.current_step)) {
@@ -281,6 +301,25 @@ export function WorkbenchClient({
     setPreviewRefreshing(false);
   }
 
+  async function continueProject(prompt: string) {
+    if (continuationSubmitting || !canStartContinuationRun(run.status)) return;
+    setContinuationSubmitting(true);
+    setActionError(null);
+    const formData = new FormData();
+    formData.set("projectId", project.id);
+    formData.set("runId", run.id);
+    formData.set("prompt", prompt);
+
+    try {
+      await continueProjectAction(formData);
+      await refreshWorkspace();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "创建继续开发 Run 失败。");
+    } finally {
+      setContinuationSubmitting(false);
+    }
+  }
+
   useEffect(() => {
     setWorkspaceNavigating(false);
   }, [activeTab, selectedFilePath]);
@@ -295,8 +334,11 @@ export function WorkbenchClient({
           events={events}
           controls={controls}
           loadingAction={loadingAction}
+          continuationSubmitting={continuationSubmitting}
           sandboxAutoStartPending={sandboxAutoStartPending}
           actionError={actionError}
+          canContinue={canStartContinuationRun(run.status)}
+          onContinue={continueProject}
           onStart={startSandbox}
           onStop={stopSandbox}
           layoutClasses={layoutClasses}
@@ -335,7 +377,7 @@ export function WorkbenchClient({
 
         <section className={cn(layoutClasses.content, "relative")}>
           {activeTab === "plan" ? <PlanTab artifacts={artifacts} /> : null}
-          {activeTab === "terminal" ? <TerminalTab events={events} run={run} sandboxRun={sandboxRun} /> : null}
+          {activeTab === "terminal" ? <TerminalTab events={events} /> : null}
           {activeTab === "files" ? <FilesTab projectId={project.id} files={files} sandboxStatus={run.sandbox_status ?? sandboxRun?.status ?? null} onNavigateStart={() => setWorkspaceNavigating(true)} /> : null}
           {activeTab === "editor" ? <EditorTab projectId={project.id} filePath={selectedFilePath} files={files} sandboxStatus={run.sandbox_status ?? sandboxRun?.status ?? null} /> : null}
           {activeTab === "preview" ? <PreviewTab run={run} sandboxRun={sandboxRun} previewReloadNonce={previewReloadNonce} onRefresh={refreshAll} refreshing={previewRefreshing} /> : null}
@@ -503,8 +545,11 @@ function AgentPanel({
   events,
   controls,
   loadingAction,
+  continuationSubmitting,
   sandboxAutoStartPending,
   actionError,
+  canContinue,
+  onContinue,
   onStart,
   onStop,
   layoutClasses
@@ -515,15 +560,22 @@ function AgentPanel({
   events: RunEventRow[];
   controls: ReturnType<typeof getRunControls>;
   loadingAction: "start" | "stop" | null;
+  continuationSubmitting: boolean;
   sandboxAutoStartPending: boolean;
   actionError: string | null;
+  canContinue: boolean;
+  onContinue: (prompt: string) => Promise<void>;
   onStart: () => Promise<void>;
   onStop: () => Promise<void>;
   layoutClasses: ReturnType<typeof getWorkbenchLayoutClasses>;
 }) {
+  const [continuationPrompt, setContinuationPrompt] = useState("");
   const agentProgress = useMemo(() => getAgentEventProgress(events), [events]);
   const agentDurationLabels = useMemo(() => getAgentDurationLabels(events), [events]);
-  const taskDisplayItems = useMemo(() => getTaskDisplayItems(tasks, run.status, run.sandbox_status), [run.sandbox_status, run.status, tasks]);
+  const taskDisplayItems = useMemo(
+    () => getTaskDisplayItems(tasks, run.status, run.sandbox_status, run.current_step),
+    [run.current_step, run.sandbox_status, run.status, tasks]
+  );
   const dashboardHref = getDashboardHref();
   const agentStates = useMemo(
     () =>
@@ -581,7 +633,7 @@ function AgentPanel({
         </div>
 
         <div className="pb-6">
-          <div className="mb-3 text-sm font-semibold text-slate-700">任务列表</div>
+          <div className="mb-3 text-sm font-semibold text-slate-700">计划任务</div>
           <div className="space-y-3">
             {taskDisplayItems.map(({ task, displayStatus }) => {
               return (
@@ -608,10 +660,36 @@ function AgentPanel({
 
       <div className={layoutClasses.agentPanelActions}>
         <div className="space-y-3">
-          <div className="flex items-center gap-2 rounded-lg border border-border bg-slate-50 px-3 py-2 text-sm text-slate-400">
-            <input className="min-w-0 flex-1 bg-transparent outline-none" placeholder="继续描述你想修改什么" disabled />
-            <Send className="h-4 w-4" />
-          </div>
+          <form
+            className={cn(
+              "flex items-center gap-2 rounded-lg border border-border bg-slate-50 px-3 py-2 text-sm text-slate-500",
+              canContinue && "bg-white text-slate-700"
+            )}
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!canContinue || continuationSubmitting) return;
+              const prompt = continuationPrompt.trim();
+              if (prompt.length < 4) return;
+              setContinuationPrompt("");
+              void onContinue(prompt);
+            }}
+          >
+            <input
+              className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-slate-400 disabled:cursor-not-allowed"
+              placeholder="继续描述你想修改什么"
+              value={continuationPrompt}
+              disabled={!canContinue || continuationSubmitting}
+              onChange={(event) => setContinuationPrompt(event.target.value)}
+            />
+            <button
+              type="submit"
+              disabled={!canContinue || continuationSubmitting || continuationPrompt.trim().length < 4}
+              className="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-ink disabled:cursor-not-allowed disabled:text-slate-300"
+              aria-label="发起继续开发"
+            >
+              {continuationSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+            </button>
+          </form>
           {controls.primaryAction === "approve" ? (
             <form action={approvePlanAction}>
               <input type="hidden" name="projectId" value={project.id} />
@@ -630,7 +708,7 @@ function AgentPanel({
           {controls.primaryAction === "stop" ? (
             <Button type="button" disabled={loadingAction !== null} onClick={() => void onStop()} className="w-full bg-slate-900 hover:bg-slate-700">
               {loadingAction === "stop" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Square className="h-4 w-4" />}
-              鍋滄 Sandbox
+              停止 Sandbox
             </Button>
           ) : null}
           {controls.primaryAction === "complete" ? (
@@ -732,15 +810,12 @@ function PlanTab({ artifacts }: { artifacts: ArtifactRow[] }) {
   );
 }
 
-function TerminalTab({ events, run, sandboxRun }: { events: RunEventRow[]; run: AgentRunRow; sandboxRun: SandboxRunSnapshot | null }) {
+function TerminalTab({ events }: { events: RunEventRow[] }) {
   return (
     <Card className="mx-auto max-w-6xl p-5">
       <div className="mb-4 flex items-center justify-between">
         <div>
           <div className="text-sm font-bold">Run Events</div>
-          <div className="mt-1 text-xs text-slate-400">
-            Agent: {run.status} 路 Sandbox: {run.sandbox_status ?? sandboxRun?.status ?? "not_ready"} 路 Build: {run.build_status ?? "pending"}
-          </div>
         </div>
       </div>
       <pre className="max-h-[calc(100vh-13rem)] overflow-auto whitespace-pre-wrap rounded-lg border border-border bg-slate-950 p-4 text-xs leading-5 text-slate-100">

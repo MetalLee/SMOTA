@@ -89,6 +89,15 @@ ProductAgent、ArchitectAgent、PlannerAgent 和 ReviewerAgent 默认通过 `pac
 
 ReviewerAgent 在构建成功、文件索引完成后运行。它读取 build result、run events、workspace file index、preview URL 和已知问题，通过直接 LLM API 生成中文 `REVIEW_REPORT.md`；如果 LLM 不可用，则生成确定性中文 fallback 报告。
 
+## 继续开发数据流
+
+当项目当前 Run 处于 `succeeded` 或 `failed` 时，项目详情页左侧输入框允许用户输入新的修改提示。平台会为同一项目创建新的 `agent_runs`，写入 `parent_run_id` 指向当前 Run，并解析可复用的 workspace 来源：
+
+- 普通已生成项目优先复用当前 Run 或最近可用 Run 的 `sandbox_name` 和 `workspace_files`。
+- 从发现克隆来的项目可能没有语义上的父生成 Run，但只要存在克隆时写入的 Sandbox 文件索引，也必须按已有 workspace 进行增量开发。
+
+新的 Run 仍按 ProductAgent、ArchitectAgent、PlannerAgent、CodingAgent、BuildAgent、ReviewerAgent 顺序执行。规划 Prompt 会包含原始需求、本次修改提示、上一轮 Harness artifact（如果存在）和当前文件索引。Sandbox 阶段如果已解析到可复用 `sandbox_name`，Runner 使用 `Sandbox.get` 恢复同一个持久化 Sandbox，跳过 Vite 初始化，不覆盖 `/workspace`，只写入本轮 Harness 文件并执行 OpenCode 增量修改、安装、构建、一次自动修复和质量检视。
+
 ## 部署架构
 
 - Next.js Web Console：Vercel。
@@ -128,6 +137,7 @@ ReviewerAgent 在构建成功、文件索引完成后运行。它读取 build re
 - `id uuid primary key`
 - `owner_id uuid not null references auth.users(id)`
 - `project_id uuid not null references projects(id)`
+- `parent_run_id uuid references agent_runs(id)`
 - `status text not null`
 - `current_agent text`
 - `current_step text`
@@ -210,6 +220,7 @@ Sandbox 负责：
 
 - 写入 Harness 文件。
 - 初始化 Vite React TypeScript 项目。
+- 对继续开发 Run 复用已有 `/workspace`，不重新初始化 Vite，不覆盖现有应用骨架。
 - 执行 OpenCode CLI。
 - 安装依赖。
 - 执行生产构建。

@@ -16,7 +16,7 @@ export interface MyProjectCard {
   updatedDate: string;
   published: boolean;
   showMenu: boolean;
-  showPublishedBadge: boolean;
+  statusBadge: ProjectStatusBadge | null;
   creatorName?: string;
   creatorAvatarUrl?: string | null;
   viewCount?: number;
@@ -28,6 +28,14 @@ export interface SharedProjectCardMetadata {
   creatorAvatarUrl?: string | null;
   viewCount: number;
 }
+
+export interface ProjectRunStatusRow {
+  project_id: string;
+  status: string;
+  created_at: string;
+}
+
+export type ProjectStatusBadge = "published" | "developing";
 
 export type ProjectCardMenuItem = {
   label: "在浏览器打开" | "复制链接" | "删除";
@@ -58,13 +66,23 @@ export function groupLatestSandboxRunsByProject(runs: SandboxRunPreviewRow[]) {
   return [...latestByProject.values()];
 }
 
-export function toProjectCards(projects: ProjectRow[], runs: SandboxRunPreviewRow[] = []): MyProjectCard[] {
+function isTerminalRunStatus(status: string) {
+  return status === "succeeded" || status === "failed";
+}
+
+export function getDevelopingProjectIds(runs: ProjectRunStatusRow[]): Set<string> {
+  return new Set(runs.filter((run) => !isTerminalRunStatus(run.status)).map((run) => run.project_id));
+}
+
+export function toProjectCards(projects: ProjectRow[], runs: SandboxRunPreviewRow[] = [], agentRuns: ProjectRunStatusRow[] = []): MyProjectCard[] {
   const latestRunByProject = new Map(groupLatestSandboxRunsByProject(runs).map((run) => [run.project_id, run]));
+  const developingProjectIds = getDevelopingProjectIds(agentRuns);
 
   return projects.map((project) => {
     const href = `/projects/${project.id}`;
     const latestRun = latestRunByProject.get(project.id);
     const previewUrl = latestRun?.preview_url?.trim() || "";
+    const statusBadge: ProjectStatusBadge | null = developingProjectIds.has(project.id) ? "developing" : previewUrl ? "published" : null;
 
     return {
       id: project.id,
@@ -75,9 +93,26 @@ export function toProjectCards(projects: ProjectRow[], runs: SandboxRunPreviewRo
       updatedDate: formatProjectCardDate(project.updated_at),
       published: Boolean(previewUrl),
       showMenu: true,
-      showPublishedBadge: Boolean(previewUrl)
+      statusBadge
     };
   });
+}
+
+export function getStableSharedProjectIds(runs: ProjectRunStatusRow[]): Set<string> {
+  const latestRunByProject = new Map<string, ProjectRunStatusRow>();
+
+  for (const run of runs) {
+    const existing = latestRunByProject.get(run.project_id);
+    if (!existing || new Date(run.created_at).getTime() > new Date(existing.created_at).getTime()) {
+      latestRunByProject.set(run.project_id, run);
+    }
+  }
+
+  return new Set(
+    [...latestRunByProject.values()]
+      .filter((run) => run.status === "succeeded" || run.status === "failed")
+      .map((run) => run.project_id)
+  );
 }
 
 export function toDiscoveryProjectCards(
@@ -103,7 +138,7 @@ export function toDiscoveryProjectCards(
       updatedDate: formatProjectCardDate(project.updated_at),
       published: Boolean(previewUrl),
       showMenu: false,
-      showPublishedBadge: false,
+      statusBadge: null,
       creatorName: cardMetadata?.creatorName,
       creatorAvatarUrl: cardMetadata?.creatorAvatarUrl ?? null,
       viewCount: cardMetadata?.viewCount
@@ -137,8 +172,9 @@ export function getProjectCardMenuClass(placement: ProjectCardMenuPlacement) {
   ].join(" ");
 }
 
-export function getPublishedBadgeClass() {
-  return "absolute -top-14 left-5 inline-flex items-center gap-1.5 rounded-full bg-primary/90 px-3 py-1.5 text-xs font-semibold text-white shadow-sm shadow-primary/20";
+export function getProjectStatusBadgeClass(status: ProjectStatusBadge) {
+  const tone = status === "developing" ? "bg-amber-500/95 shadow-amber-200/50" : "bg-primary/90 shadow-primary/20";
+  return `absolute -top-14 left-5 inline-flex items-center gap-1.5 rounded-full ${tone} px-3 py-1.5 text-xs font-semibold text-white shadow-sm`;
 }
 
 export function getPreviewPlaceholderClasses() {

@@ -58,6 +58,13 @@ export interface FileTreeTableInput {
   last_modified_at: string | null;
 }
 
+export interface WorkspaceFileVisibilityInput {
+  id: string;
+  path: string;
+  run_id: string | null;
+  updated_at: string;
+}
+
 export interface FileTreeTableRow<T extends FileTreeTableInput> {
   id: string;
   path: string;
@@ -214,6 +221,10 @@ export function mergeRunEvents<T extends RunEventMergeInput>(currentEvents: T[],
   });
 }
 
+export function shouldReloadRunEvents(currentRunId: string, nextRunId: string): boolean {
+  return currentRunId !== nextRunId;
+}
+
 export function getLocalizedStatusLabel(status: string | null | undefined): string {
   if (!status) return STATUS_LABELS.not_ready;
   return STATUS_LABELS[status] ?? status;
@@ -248,7 +259,7 @@ export function getWorkbenchLayoutClasses(): WorkbenchLayoutClasses {
     root: "flex h-screen overflow-hidden bg-[#f6f7fb]",
     sidebar: "flex h-screen w-[360px] shrink-0 flex-col overflow-hidden border-r border-border bg-white p-5",
     agentPanel: "flex min-h-0 flex-1 flex-col",
-    agentPanelSummary: "min-h-0 flex-1 overflow-y-auto pr-1",
+    agentPanelSummary: "agent-sidebar-scroll min-h-0 flex-1 overflow-y-auto pr-1",
     agentPanelActions: "shrink-0 border-t border-border bg-white pt-4",
     main: "flex h-screen min-w-0 flex-1 flex-col overflow-hidden",
     content: "min-h-0 flex-1 overflow-y-auto p-6"
@@ -366,6 +377,21 @@ export function getFileTreeTableRows<T extends FileTreeTableInput>(files: T[]): 
   return rows;
 }
 
+export function selectVisibleWorkspaceFiles<T extends WorkspaceFileVisibilityInput>(files: T[], currentRunId: string): T[] {
+  const currentRunFiles = files.filter((file) => file.run_id === currentRunId);
+  const sourceFiles = currentRunFiles.length ? currentRunFiles : files;
+  const fileByPath = new Map<string, T>();
+
+  for (const file of sourceFiles) {
+    const current = fileByPath.get(file.path);
+    if (!current || file.updated_at.localeCompare(current.updated_at) >= 0) {
+      fileByPath.set(file.path, file);
+    }
+  }
+
+  return [...fileByPath.values()].sort((a, b) => a.path.localeCompare(b.path));
+}
+
 export function getExpandedDirectorySet(filePath: string): Set<string> {
   const segments = filePath.split("/").filter(Boolean);
   const expanded = new Set<string>();
@@ -380,15 +406,17 @@ export function getExpandedDirectorySet(filePath: string): Set<string> {
 export function getTaskDisplayStatus(taskStatus: string, runStatus: string, sandboxStatus: string | null): DisplayProgressStatus {
   if (taskStatus === "done" || runStatus === "succeeded") return "done";
 
-  if (
-    taskStatus === "in_progress" ||
-    runStatus === "running" ||
-    ["creating", "ready", "generating", "installing", "building", "fixing", "previewing"].includes(sandboxStatus ?? "")
-  ) {
+  if (taskStatus === "in_progress") {
     return "in_progress";
   }
 
   return "todo";
+}
+
+function isCodingTaskDisplayActive(runStatus: string, currentStep: string | null | undefined) {
+  if (runStatus !== "running") return false;
+  const step = currentStep?.toLowerCase() ?? "";
+  return step.includes("opencode") || step.includes("coding");
 }
 
 const TASK_STATUS_ORDER: Record<DisplayProgressStatus, number> = {
@@ -397,11 +425,29 @@ const TASK_STATUS_ORDER: Record<DisplayProgressStatus, number> = {
   todo: 2
 };
 
-export function getTaskDisplayItems<T extends TaskDisplayInput>(tasks: T[], runStatus: string, sandboxStatus: string | null): Array<TaskDisplayItem<T>> {
+export function getTaskDisplayItems<T extends TaskDisplayInput>(
+  tasks: T[],
+  runStatus: string,
+  sandboxStatus: string | null,
+  currentStep?: string | null
+): Array<TaskDisplayItem<T>> {
+  const hasPersistedActiveTask = tasks.some((task) => task.status === "in_progress");
+  const activeTaskId =
+    !hasPersistedActiveTask && isCodingTaskDisplayActive(runStatus, currentStep)
+      ? [...tasks]
+          .filter((task) => task.status !== "done")
+          .sort((a, b) => {
+            const sortDelta = a.sort_order - b.sort_order;
+            if (sortDelta !== 0) return sortDelta;
+
+            return a.created_at.localeCompare(b.created_at);
+          })[0]?.id
+      : null;
+
   return tasks
     .map((task) => ({
       task,
-      displayStatus: getTaskDisplayStatus(task.status, runStatus, sandboxStatus)
+      displayStatus: task.id === activeTaskId ? "in_progress" : getTaskDisplayStatus(task.status, runStatus, sandboxStatus)
     }))
     .sort((a, b) => {
       const statusDelta = TASK_STATUS_ORDER[a.displayStatus] - TASK_STATUS_ORDER[b.displayStatus];
@@ -421,9 +467,10 @@ export function getAgentDisplayStates(input: AgentDisplayStateInput): Record<Age
   const sandboxStatus = input.sandboxStatus ?? "";
   const buildStatus = input.buildStatus ?? "";
   const runSucceeded = input.runStatus === "succeeded";
-  const sandboxStarted = ["creating", "ready", "generating", "installing", "building", "fixing", "previewing"].includes(sandboxStatus);
-  const codingDone = runSucceeded || ["installing", "building", "fixing", "previewing"].includes(sandboxStatus) || buildStatus === "running" || buildStatus === "succeeded";
-  const buildStarted = ["installing", "building", "fixing", "previewing"].includes(sandboxStatus) || buildStatus === "running" || buildStatus === "succeeded";
+  const runWorkflowActive = input.runStatus === "running";
+  const sandboxStarted = runWorkflowActive && ["creating", "ready", "generating", "installing", "building", "fixing", "previewing"].includes(sandboxStatus);
+  const codingDone = runSucceeded || (runWorkflowActive && ["installing", "building", "fixing", "previewing"].includes(sandboxStatus)) || buildStatus === "running" || buildStatus === "succeeded";
+  const buildStarted = (runWorkflowActive && ["installing", "building", "fixing", "previewing"].includes(sandboxStatus)) || buildStatus === "running" || buildStatus === "succeeded";
 
   return {
     ProductAgent: runSucceeded || completedAgents.has("ProductAgent") ? "done" : activeAgents.has("ProductAgent") || currentStep.includes("product") ? "in_progress" : "todo",

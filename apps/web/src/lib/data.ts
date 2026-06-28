@@ -1,7 +1,15 @@
 import { redirect } from "next/navigation";
 import type { AgentRunRow, ArtifactRow, ProjectRow, RunEventRow, TaskRow, WorkspaceFileRow } from "@smota/shared";
 import { createSupabaseServiceClient } from "@smota/sandbox-runner";
-import { toDiscoveryProjectCards, toProjectCards, type SandboxRunPreviewRow, type SharedProjectCardMetadata } from "@/lib/my-projects";
+import {
+  getStableSharedProjectIds,
+  toDiscoveryProjectCards,
+  toProjectCards,
+  type ProjectRunStatusRow,
+  type SandboxRunPreviewRow,
+  type SharedProjectCardMetadata
+} from "@/lib/my-projects";
+import { selectVisibleWorkspaceFiles } from "@/lib/workbench";
 import { createClient } from "@/lib/supabase/server";
 
 export async function getCurrentUser() {
@@ -80,14 +88,22 @@ export async function getMyProjectsData(activeTab: "all" | "favorites" = "all") 
   const projectRows = (projects ?? []) as ProjectRow[];
   const projectIds = projectRows.map((project) => project.id);
 
-  const { data: runs } = projectIds.length
-    ? await supabase
-        .from("sandbox_runs")
-        .select("project_id,preview_url,preview_image_url,updated_at")
-        .eq("owner_id", user.id)
-        .in("project_id", projectIds)
-        .order("updated_at", { ascending: false })
-    : { data: [] };
+  const [{ data: runs }, { data: agentRuns }] = projectIds.length
+    ? await Promise.all([
+        supabase
+          .from("sandbox_runs")
+          .select("project_id,preview_url,preview_image_url,updated_at")
+          .eq("owner_id", user.id)
+          .in("project_id", projectIds)
+          .order("updated_at", { ascending: false }),
+        supabase
+          .from("agent_runs")
+          .select("project_id,status,created_at")
+          .eq("owner_id", user.id)
+          .in("project_id", projectIds)
+          .order("created_at", { ascending: false })
+      ])
+    : [{ data: [] }, { data: [] }];
 
   const previewRows = toSandboxPreviewRows(runs);
 
@@ -104,26 +120,31 @@ export async function getMyProjectsData(activeTab: "all" | "favorites" = "all") 
       : { data: [] };
     const favoriteProjects = (favoriteProjectRows ?? []) as ProjectRow[];
     const favoriteProjectIds = favoriteProjects.map((project) => project.id);
-    const { data: favoriteRuns } = favoriteProjectIds.length
-      ? await admin
-          .from("sandbox_runs")
-          .select("project_id,preview_url,preview_image_url,updated_at")
-          .in("project_id", favoriteProjectIds)
-          .not("preview_url", "is", null)
-          .order("updated_at", { ascending: false })
-      : { data: [] };
+    const [{ data: favoriteRuns }, { data: favoriteAgentRuns }] = favoriteProjectIds.length
+      ? await Promise.all([
+          admin
+            .from("sandbox_runs")
+            .select("project_id,preview_url,preview_image_url,updated_at")
+            .in("project_id", favoriteProjectIds)
+            .not("preview_url", "is", null)
+            .order("updated_at", { ascending: false }),
+          admin.from("agent_runs").select("project_id,status,created_at").in("project_id", favoriteProjectIds).order("created_at", { ascending: false })
+        ])
+      : [{ data: [] }, { data: [] }];
+    const stableProjectIds = getStableSharedProjectIds(favoriteAgentRuns ?? []);
+    const stableFavoriteProjects = favoriteProjects.filter((project) => stableProjectIds.has(project.id));
 
     return {
       user,
       projects: projectRows,
-      projectCards: toDiscoveryProjectCards(favoriteProjects, toSandboxPreviewRows(favoriteRuns), await getSharedProjectCardMetadata(admin, favoriteProjects))
+      projectCards: toDiscoveryProjectCards(stableFavoriteProjects, toSandboxPreviewRows(favoriteRuns), await getSharedProjectCardMetadata(admin, stableFavoriteProjects))
     };
   }
 
   return {
     user,
     projects: projectRows,
-    projectCards: toProjectCards(projectRows, previewRows)
+    projectCards: toProjectCards(projectRows, previewRows, (agentRuns ?? []) as ProjectRunStatusRow[])
   };
 }
 
@@ -143,7 +164,13 @@ export async function getResourceData() {
     .eq("is_shared_to_discovery", true)
     .order("shared_at", { ascending: false });
 
-  const projectRows = (sharedProjects ?? []) as ProjectRow[];
+  const sharedProjectRows = (sharedProjects ?? []) as ProjectRow[];
+  const sharedProjectIds = sharedProjectRows.map((project) => project.id);
+  const { data: sharedAgentRuns } = sharedProjectIds.length
+    ? await admin.from("agent_runs").select("project_id,status,created_at").in("project_id", sharedProjectIds).order("created_at", { ascending: false })
+    : { data: [] };
+  const stableProjectIds = getStableSharedProjectIds(sharedAgentRuns ?? []);
+  const projectRows = sharedProjectRows.filter((project) => stableProjectIds.has(project.id));
   const projectIds = projectRows.map((project) => project.id);
   const { data: runs } = projectIds.length
     ? await admin
@@ -284,6 +311,6 @@ export async function getProjectWorkspace(projectId: string) {
     artifacts: (artifacts ?? []) as ArtifactRow[],
     tasks: (tasks ?? []) as TaskRow[],
     events: (events ?? []) as RunEventRow[],
-    files: (files ?? []) as WorkspaceFileRow[]
+    files: selectVisibleWorkspaceFiles((files ?? []) as WorkspaceFileRow[], run.id)
   };
 }

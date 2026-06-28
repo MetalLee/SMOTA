@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildPlaceholderProjectName, shouldAutoStartPlanning, shouldAutoStartSandbox } from "./project-planning";
+import { buildPlaceholderProjectName, canStartContinuationRun, shouldAutoStartPlanning, shouldAutoStartSandbox } from "./project-planning";
 
 describe("project planning helpers", () => {
   it("uses the first ten prompt characters plus ellipsis as the placeholder project name", () => {
@@ -19,5 +19,13 @@ describe("project planning helpers", () => {
     expect(shouldAutoStartSandbox("approved", "creating_sandbox")).toBe(false);
     expect(shouldAutoStartSandbox("failed_retryable", "approved_waiting_for_sandbox")).toBe(false);
     expect(shouldAutoStartSandbox("running", "creating_sandbox")).toBe(false);
+  });
+
+  it("allows continuation prompts only after terminal run states", () => {
+    expect(canStartContinuationRun("succeeded")).toBe(true);
+    expect(canStartContinuationRun("failed")).toBe(true);
+    expect(canStartContinuationRun("planning")).toBe(false);
+    expect(canStartContinuationRun("pending_approval")).toBe(false);
+    expect(canStartContinuationRun("running")).toBe(false);
   });
 });

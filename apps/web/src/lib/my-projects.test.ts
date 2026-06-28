@@ -7,7 +7,8 @@ import {
   getProjectCardMenuItems,
   getProjectCardMenuClass,
   getProjectCardShellClass,
-  getPublishedBadgeClass,
+  getProjectStatusBadgeClass,
+  getStableSharedProjectIds,
   toDiscoveryProjectCards,
   groupLatestSandboxRunsByProject,
   shouldCloseProjectMenuOnPointerDown,
@@ -82,9 +83,43 @@ describe("my projects helpers", () => {
         updatedDate: "2026/06/27",
         published: true,
         showMenu: true,
-        showPublishedBadge: true
+        statusBadge: "published"
       }
     ]);
+  });
+
+  it("marks owned projects as developing when they have an unfinished run", () => {
+    const [card] = toProjectCards(
+      [
+        {
+          id: "project-1",
+          owner_id: "user-1",
+          name: "像素Roguelike游戏宣发页",
+          description: "prompt",
+          prompt: "prompt",
+          app_type: "Web App",
+          mode: "plan-first",
+          status: "succeeded",
+          created_at: "2026-06-20T00:00:00.000Z",
+          updated_at: "2026-06-28T00:00:00.000Z"
+        }
+      ],
+      [
+        {
+          project_id: "project-1",
+          preview_url: "https://preview.example.dev",
+          preview_image_url: "https://assets.example.dev/preview.png",
+          updated_at: "2026-06-27T01:00:00.000Z"
+        }
+      ],
+      [
+        { project_id: "project-1", status: "succeeded", created_at: "2026-06-27T00:00:00.000Z" },
+        { project_id: "project-1", status: "running", created_at: "2026-06-28T00:00:00.000Z" }
+      ]
+    );
+
+    expect(card?.published).toBe(true);
+    expect(card?.statusBadge).toBe("developing");
   });
 
   it("falls back to project workspace when preview is missing", () => {
@@ -112,7 +147,7 @@ describe("my projects helpers", () => {
     expect(card?.previewImageUrl).toBeNull();
     expect(card?.published).toBe(false);
     expect(card?.showMenu).toBe(true);
-    expect(card?.showPublishedBadge).toBe(false);
+    expect(card?.statusBadge).toBeNull();
   });
 
   it("projects shared discovery rows into card links without owner-only controls", () => {
@@ -157,11 +192,22 @@ describe("my projects helpers", () => {
       openUrl: "https://preview.example.dev",
       published: true,
       showMenu: false,
-      showPublishedBadge: false,
+      statusBadge: null,
       creatorName: "Cauã Martins Ribeiro",
       creatorAvatarUrl: "https://assets.example.dev/avatar.png",
       viewCount: 270
     });
+  });
+
+  it("hides shared projects while their latest run is not terminal", () => {
+    expect(
+      getStableSharedProjectIds([
+        { project_id: "project-1", status: "succeeded", created_at: "2026-06-27T00:00:00.000Z" },
+        { project_id: "project-2", status: "succeeded", created_at: "2026-06-27T00:00:00.000Z" },
+        { project_id: "project-2", status: "running", created_at: "2026-06-28T00:00:00.000Z" },
+        { project_id: "project-3", status: "failed", created_at: "2026-06-28T00:00:00.000Z" }
+      ])
+    ).toEqual(new Set(["project-1", "project-3"]));
   });
 
   it("keeps project card actions limited to browser, copy, and delete", () => {
@@ -172,11 +218,13 @@ describe("my projects helpers", () => {
     expect(getMyProjectsGridClass()).toContain("grid-cols-[repeat(auto-fill,360px)]");
   });
 
-  it("uses a theme-colored published badge", () => {
-    const badgeClass = getPublishedBadgeClass();
+  it("uses distinct status badge styles for published and developing projects", () => {
+    const publishedBadgeClass = getProjectStatusBadgeClass("published");
+    const developingBadgeClass = getProjectStatusBadgeClass("developing");
 
-    expect(badgeClass).toContain("bg-primary");
-    expect(badgeClass).not.toContain("bg-slate-950");
+    expect(publishedBadgeClass).toContain("bg-primary");
+    expect(developingBadgeClass).toContain("bg-amber");
+    expect(developingBadgeClass).not.toBe(publishedBadgeClass);
   });
 
   it("uses line-based preview placeholder classes instead of block or circle skeletons", () => {

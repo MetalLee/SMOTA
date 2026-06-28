@@ -73,6 +73,7 @@ export interface AgentRunRow {
   id: string;
   owner_id: string;
   project_id: string;
+  parent_run_id?: string | null;
   mode: AppMode | string;
   user_prompt: string;
   status: string;

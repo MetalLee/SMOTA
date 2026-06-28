@@ -14,7 +14,8 @@ import {
   sanitizeWorkspacePath
 } from "@smota/sandbox-runner";
 import { isProjectShareable } from "@/lib/project-sharing";
-import { buildPlaceholderProjectName } from "@/lib/project-planning";
+import { selectContinuationWorkspaceSource } from "@/lib/continuation-run";
+import { buildPlaceholderProjectName, canStartContinuationRun } from "@/lib/project-planning";
 import { createClient } from "@/lib/supabase/server";
 
 async function requireUser() {
@@ -159,6 +160,108 @@ export async function deleteProjectAction(formData: FormData) {
 
   revalidatePath("/my-projects");
   revalidatePath("/dashboard");
+}
+
+export async function continueProjectAction(formData: FormData) {
+  const projectId = String(formData.get("projectId") ?? "");
+  const currentRunId = String(formData.get("runId") ?? "");
+  const prompt = String(formData.get("prompt") ?? "").replace(/\s+/g, " ").trim();
+  const { supabase, user } = await requireUser();
+
+  if (!projectId || !currentRunId) {
+    throw new Error("缺少项目或 Run ID。");
+  }
+
+  if (prompt.length < 4) {
+    throw new Error("请输入至少 4 个字符的修改需求。");
+  }
+
+  const [{ data: project }, { data: currentRun }, { data: runs }, { data: files }] = await Promise.all([
+    supabase.from("projects").select("*").eq("id", projectId).eq("owner_id", user.id).single(),
+    supabase.from("agent_runs").select("*").eq("id", currentRunId).eq("project_id", projectId).eq("owner_id", user.id).single(),
+    supabase
+      .from("agent_runs")
+      .select("id,sandbox_name,sandbox_preview_url,current_step,status,sandbox_status,created_at")
+      .eq("project_id", projectId)
+      .eq("owner_id", user.id)
+      .order("created_at", { ascending: false }),
+    supabase.from("workspace_files").select("run_id,path").eq("project_id", projectId).eq("owner_id", user.id).order("path", { ascending: true })
+  ]);
+
+  if (!project || !currentRun) {
+    throw new Error("项目或当前 Run 不存在。");
+  }
+
+  if (!canStartContinuationRun(String(currentRun.status))) {
+    throw new Error("只有已完成或已失败的 Run 可以继续开发。");
+  }
+
+  const source = selectContinuationWorkspaceSource({
+    project: { source_project_id: project.source_project_id ?? null },
+    currentRunId,
+    runs: runs ?? [],
+    files: files ?? []
+  });
+
+  if (!source) {
+    throw new Error("当前项目没有可继续开发的 Sandbox 文件，请重新生成或重新克隆。");
+  }
+
+  const { data: run, error: runError } = await supabase
+    .from("agent_runs")
+    .insert({
+      owner_id: user.id,
+      project_id: projectId,
+      parent_run_id: currentRunId,
+      mode: currentRun.mode,
+      user_prompt: prompt,
+      status: "planning",
+      current_step: "planning_queued",
+      runner_provider: "vercel_sandbox",
+      sandbox_name: source.sourceSandboxName,
+      sandbox_status: "ready",
+      sandbox_preview_url: source.sourcePreviewUrl,
+      sandbox_runtime: currentRun.sandbox_runtime ?? process.env.SANDBOX_RUNTIME ?? "node24",
+      sandbox_timeout_ms: currentRun.sandbox_timeout_ms ?? Number(process.env.SANDBOX_TIMEOUT_MS ?? 2700000),
+      fix_attempted: false
+    })
+    .select("id")
+    .single();
+
+  if (runError || !run) {
+    throw new Error(runError?.message ?? "创建继续开发 Run 失败。");
+  }
+
+  const sourceLabel = source.isClonedWorkspace ? "克隆项目" : "当前项目";
+  await Promise.all([
+    supabase.from("tasks").insert({
+      owner_id: user.id,
+      project_id: projectId,
+      run_id: run.id,
+      title: "生成继续开发计划",
+      description: "ProductAgent、ArchitectAgent 和 PlannerAgent 会基于已有文件生成增量计划。",
+      status: "in_progress",
+      sort_order: 1
+    }),
+    supabase.from("run_events").insert({
+      owner_id: user.id,
+      project_id: projectId,
+      run_id: run.id,
+      agent_name: null,
+      event_type: "run.continuation.created",
+      step: "planning_queued",
+      message: `已基于${sourceLabel}已有 Sandbox 文件创建继续开发 Run。`,
+      stream: "system",
+      metadata: {
+        sourceRunId: source.sourceRunId,
+        sourceSandboxName: source.sourceSandboxName,
+        source: source.isClonedWorkspace ? "cloned_workspace" : "own_previous_run"
+      }
+    })
+  ]);
+
+  revalidatePath(`/projects/${projectId}`);
+  return { runId: run.id };
 }
 
 export async function updateProjectShareAction(formData: FormData) {
