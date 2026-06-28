@@ -19,7 +19,7 @@ export function ProjectForm() {
           <h1 className="text-3xl font-bold tracking-tight">你想构建什么？</h1>
           <p className="mt-2 text-sm text-slate-500">输入一句话，SMOTA 会先生成项目计划和 Harness 文档。</p>
         </div>
-        <Textarea name="prompt" required placeholder="例如：为宠物诊所创建预约管理后台" />
+        <Textarea name="prompt" required placeholder="例如：做一个面向设计师的作品集 Landing Page" />
 
         <div className="grid gap-4 lg:grid-cols-2">
           <fieldset className="rounded-lg border border-border p-4">
