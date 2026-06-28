@@ -14,6 +14,7 @@ import {
   buildSandboxName,
   buildSandboxRuntimeConfig,
   getVercelSandboxToken,
+  isVercelSandboxNotFoundError,
   isProbablyBinary,
   scanWorkspaceFiles,
   sanitizeWorkspacePath,
@@ -131,6 +132,12 @@ describe("sandbox runner helpers", () => {
     expect(prompt).toContain("PROJECT_BRIEF.md");
     expect(prompt).toContain("All generated application code must stay inside /workspace.");
     expect(prompt).toContain("简体中文");
+  });
+
+  it("recognizes missing Vercel Sandbox errors", () => {
+    expect(isVercelSandboxNotFoundError(Object.assign(new Error("not_found"), { code: "not_found" }))).toBe(true);
+    expect(isVercelSandboxNotFoundError(Object.assign(new Error("Status code 404 is not ok"), { status: 404 }))).toBe(true);
+    expect(isVercelSandboxNotFoundError(new Error("quota exceeded"))).toBe(false);
   });
 
   it("builds a continuation CodingAgent prompt for cloned workspaces", () => {

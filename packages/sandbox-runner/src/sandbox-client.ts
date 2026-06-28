@@ -66,3 +66,25 @@ export async function getVercelSandbox(name: string) {
     projectId: process.env.VERCEL_PROJECT_ID
   });
 }
+
+export function isVercelSandboxNotFoundError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+
+  const record = error as Record<string, unknown>;
+  const code = String(record.code ?? "").toLowerCase();
+  const status = Number(record.status ?? record.statusCode ?? 0);
+  const message = error instanceof Error ? error.message.toLowerCase() : String(record.message ?? "").toLowerCase();
+
+  return status === 404 || code === "not_found" || message.includes("not_found") || message.includes("not found") || message.includes("404");
+}
+
+export async function deleteVercelSandbox(name: string) {
+  const sandbox = await Sandbox.get({
+    name,
+    resume: false,
+    token: getVercelSandboxToken(process.env),
+    teamId: process.env.VERCEL_TEAM_ID,
+    projectId: process.env.VERCEL_PROJECT_ID
+  });
+  await sandbox.delete();
+}

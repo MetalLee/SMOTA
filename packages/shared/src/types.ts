@@ -35,6 +35,7 @@ export interface GeneratedTask {
   description: string;
   status: "todo" | "in_progress" | "done";
   sortOrder: number;
+  agentName: AgentName;
 }
 
 export interface GeneratedRunEvent {
@@ -112,6 +113,7 @@ export interface TaskRow {
   title: string;
   description: string | null;
   status: string;
+  agent_name: AgentName | string | null;
   sort_order: number;
   created_at: string;
   updated_at: string;

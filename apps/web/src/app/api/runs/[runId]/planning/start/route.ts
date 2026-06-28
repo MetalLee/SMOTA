@@ -1,5 +1,10 @@
 import { NextResponse } from "next/server";
-import { createAgentOrchestrator, generateContinuationHarnessBundle, generateHarnessBundle } from "@smota/agent-core";
+import {
+  createAgentOrchestrator,
+  generateContinuationHarnessBundle,
+  generateHarnessBundle,
+  generatePlanRevisionHarnessBundle as generateFallbackPlanRevisionHarnessBundle
+} from "@smota/agent-core";
 import type { AgentOrchestratorCallbacks } from "@smota/agent-core";
 import type { GeneratedRunEvent, GeneratedTask, HarnessArtifact, ProjectCreationInput } from "@smota/shared";
 import { selectContinuationWorkspaceSource } from "@/lib/continuation-run";
@@ -7,6 +12,7 @@ import { createClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+const HARNESS_PATHS = ["PROJECT_BRIEF.md", "ARCHITECTURE.md", "ROADMAP.md", "CODEX_TASK_RULES.md", "AGENTS.md"];
 
 function toProjectCreationInput(run: { user_prompt: string; mode: string }, project: { app_type: string }): ProjectCreationInput {
   return {
@@ -74,6 +80,7 @@ async function insertTasks(
       title: task.title,
       description: task.description,
       status: task.status,
+      agent_name: task.agentName,
       sort_order: task.sortOrder
     }))
   );
@@ -106,15 +113,27 @@ export async function POST(_request: Request, { params }: { params: Promise<{ ru
 
   const context = { ownerId: user.id, projectId: String(run.project_id), runId: String(run.id) };
   const input = toProjectCreationInput(run, project);
-  const [{ data: projectRuns }, { data: projectFiles }] = await Promise.all([
+  const [{ data: projectRuns }, { data: projectFiles }, { data: existingArtifacts }] = await Promise.all([
     supabase
       .from("agent_runs")
       .select("id,sandbox_name,sandbox_preview_url,current_step,status,sandbox_status,created_at")
       .eq("project_id", run.project_id)
       .eq("owner_id", user.id)
       .order("created_at", { ascending: false }),
-    supabase.from("workspace_files").select("run_id,path").eq("project_id", run.project_id).eq("owner_id", user.id).order("path", { ascending: true })
+    supabase.from("workspace_files").select("run_id,path").eq("project_id", run.project_id).eq("owner_id", user.id).order("path", { ascending: true }),
+    supabase
+      .from("artifacts")
+      .select("path,content")
+      .eq("project_id", run.project_id)
+      .eq("run_id", run.id)
+      .eq("owner_id", user.id)
+      .in("path", HARNESS_PATHS)
   ]);
+  const existingHarnessArtifacts = (existingArtifacts ?? []).map((artifact: { path: string; content: string }) => ({
+    path: artifact.path,
+    content: artifact.content
+  }));
+  const isPlanRevision = existingHarnessArtifacts.length > 0;
   const continuationSource = selectContinuationWorkspaceSource({
     project: { source_project_id: project.source_project_id ?? null },
     currentRunId: String(run.parent_run_id ?? run.id),
@@ -124,7 +143,13 @@ export async function POST(_request: Request, { params }: { params: Promise<{ ru
 
   await Promise.all([
     supabase.from("artifacts").delete().eq("run_id", run.id).eq("owner_id", user.id),
-    supabase.from("tasks").delete().eq("run_id", run.id).eq("owner_id", user.id)
+    supabase.from("tasks").delete().eq("run_id", run.id).eq("owner_id", user.id),
+    supabase
+      .from("run_events")
+      .delete()
+      .eq("run_id", run.id)
+      .eq("owner_id", user.id)
+      .in("agent_name", ["ProductAgent", "ArchitectAgent", "PlannerAgent"])
   ]);
 
   await supabase
@@ -145,7 +170,7 @@ export async function POST(_request: Request, { params }: { params: Promise<{ ru
       onTasks: (tasks) => insertTasks(supabase, context, tasks)
     };
     const orchestrator = createAgentOrchestrator();
-    const sourceArtifacts = continuationSource
+    const sourceArtifacts = !isPlanRevision && continuationSource
       ? await supabase
           .from("artifacts")
           .select("path,content")
@@ -153,9 +178,20 @@ export async function POST(_request: Request, { params }: { params: Promise<{ ru
           .eq("run_id", continuationSource.sourceRunId)
           .eq("owner_id", user.id)
       : { data: [] };
-    const bundle = continuationSource
-      ? await orchestrator.generateContinuationHarnessBundle(
+    const bundle = isPlanRevision
+      ? await orchestrator.generatePlanRevisionHarnessBundle(
           {
+            originalPrompt: project.prompt ?? project.description ?? "",
+            revisionPrompt: run.user_prompt,
+            mode: normalizeMode(run.mode),
+            appType: normalizeAppType(project.app_type),
+            previousArtifacts: existingHarnessArtifacts
+          },
+          callbacks
+        )
+      : continuationSource
+        ? await orchestrator.generateContinuationHarnessBundle(
+            {
             originalPrompt: project.prompt ?? project.description ?? "",
             changePrompt: run.user_prompt,
             mode: normalizeMode(run.mode),
@@ -180,7 +216,15 @@ export async function POST(_request: Request, { params }: { params: Promise<{ ru
     return NextResponse.json({ status: "pending_approval", projectName: bundle.projectName });
   } catch (error) {
     const message = error instanceof Error ? error.message : "真实 LLM 规划生成失败，已回退到本地计划生成器。";
-    const bundle = continuationSource
+    const bundle = isPlanRevision
+      ? generateFallbackPlanRevisionHarnessBundle({
+          originalPrompt: project.prompt ?? project.description ?? "",
+          revisionPrompt: run.user_prompt,
+          mode: normalizeMode(run.mode),
+          appType: normalizeAppType(project.app_type),
+          previousArtifacts: existingHarnessArtifacts
+        })
+      : continuationSource
       ? generateContinuationHarnessBundle({
           originalPrompt: project.prompt ?? project.description ?? "",
           changePrompt: run.user_prompt,

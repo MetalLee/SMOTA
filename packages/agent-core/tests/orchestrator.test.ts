@@ -97,7 +97,7 @@ describe("agent orchestrator", () => {
       "AGENTS.md"
     ]);
     expect(bundle.artifacts.find((artifact) => artifact.path === "PROJECT_BRIEF.md")?.content).toContain("宠物诊所预约管理后台");
-    expect(bundle.tasks.map((task) => task.title)).toEqual(["确认产品目标", "等待用户批准计划"]);
+    expect(bundle.tasks.map((task) => task.title)).toEqual(["确认产品目标"]);
     expect(bundle.events.map((event) => event.eventType)).not.toContain("agent.reasoning");
     expect(bundle.events.map((event) => event.agentName)).toEqual([
       "ProductAgent",
@@ -212,6 +212,54 @@ describe("agent orchestrator", () => {
     expect(prompts.join("\n")).toContain("src/App.tsx");
   });
 
+  it("generates plan revision harness artifacts from existing harness documents", async () => {
+    const prompts: string[] = [];
+    const provider = createScriptedProvider([
+      JSON.stringify({
+        projectName: "像素游戏宣发页",
+        projectBrief: "# PROJECT_BRIEF.md\n\n保留像素游戏定位，加入亮色模式调整。",
+        tasks: [{ title: "确认计划修改目标", description: "基于已有 Harness 修订", status: "done", agentName: "ProductAgent" }]
+      }),
+      JSON.stringify({
+        architecture: "# ARCHITECTURE.md\n\n沿用 React 架构，调整主题变量。",
+        codexRules: "# CODEX_TASK_RULES.md\n\n保持现有文件结构。"
+      }),
+      JSON.stringify({
+        roadmap: "# ROADMAP.md\n\n调整亮色主题并验收。",
+        agents: "# AGENTS.md\n\nPlannerAgent 重新生成任务。",
+        tasks: [{ title: "实现亮色主题", description: "修改样式变量", status: "todo", agentName: "CodingAgent" }]
+      })
+    ]);
+    const originalGenerateText = provider.generateText;
+    provider.generateText = async (input) => {
+      prompts.push(input.prompt);
+      return originalGenerateText(input);
+    };
+
+    const bundle = await createAgentOrchestrator({ llm: provider }).generatePlanRevisionHarnessBundle({
+      originalPrompt: "制作像素 Roguelike 游戏宣发页",
+      revisionPrompt: "将整体视觉改成亮色模式",
+      mode: "plan-first",
+      appType: "Landing Page",
+      previousArtifacts: [
+        { path: "PROJECT_BRIEF.md", content: "# 旧项目简介\n深色像素风" },
+        { path: "ARCHITECTURE.md", content: "# 旧架构\nReact + Tailwind" }
+      ]
+    });
+
+    expect(bundle.artifacts.map((artifact) => artifact.path)).toEqual([
+      "PROJECT_BRIEF.md",
+      "ARCHITECTURE.md",
+      "CODEX_TASK_RULES.md",
+      "ROADMAP.md",
+      "AGENTS.md"
+    ]);
+    expect(bundle.tasks.map((task) => task.title)).toEqual(["确认计划修改目标", "实现亮色主题"]);
+    expect(prompts.join("\n")).toContain("将整体视觉改成亮色模式");
+    expect(prompts.join("\n")).toContain("# 旧项目简介");
+    expect(prompts.join("\n")).toContain("重新修改 Harness");
+  });
+
   it("reindexes generated tasks in agent execution order when model sort orders are noisy", async () => {
     const provider = createScriptedProvider([
       JSON.stringify({
@@ -245,8 +293,40 @@ describe("agent orchestrator", () => {
     expect(bundle.tasks.map((task) => `${task.sortOrder}:${task.title}`)).toEqual([
       "1:确认产品目标",
       "2:梳理核心功能",
-      "3:等待用户批准计划",
-      "4:开发环境搭建"
+      "3:开发环境搭建"
     ]);
+  });
+
+  it("normalizes task agent assignments and omits approval placeholder tasks", async () => {
+    const provider = createScriptedProvider([
+      JSON.stringify({
+        projectName: "Portfolio",
+        projectBrief: "# Project Brief\nDesigner portfolio",
+        tasks: [{ title: "确认产品目标", description: "目标", status: "done", sortOrder: 1, agentName: "ProductAgent" }]
+      }),
+      JSON.stringify({
+        architecture: "# Architecture\nReact",
+        codexRules: "# Rules\nClean UI"
+      }),
+      JSON.stringify({
+        roadmap: "# Roadmap\nPhase 1",
+        agents: "# AGENTS\nPlannerAgent",
+        tasks: [
+          { title: "等待用户批准计划", description: "批准后启动", status: "todo", sortOrder: 2, agentName: "PlannerAgent" },
+          { title: "实现页面", description: "编码应用", status: "todo", sortOrder: 3, agentName: "CodingAgent" },
+          { title: "运行构建", description: "pnpm build", status: "todo", sortOrder: 4, agentName: "BuildAgent" },
+          { title: "输出质量报告", description: "总结结果", status: "todo", sortOrder: 5, agentName: "ReviewerAgent" }
+        ]
+      })
+    ]);
+
+    const bundle = await createAgentOrchestrator({ llm: provider }).generateHarnessBundle({
+      prompt: "Create a designer portfolio landing page",
+      mode: "plan-first",
+      appType: "Landing Page"
+    });
+
+    expect(bundle.tasks.map((task) => task.title)).toEqual(["确认产品目标", "实现页面", "运行构建", "输出质量报告"]);
+    expect(bundle.tasks.map((task) => task.agentName)).toEqual(["ProductAgent", "CodingAgent", "BuildAgent", "ReviewerAgent"]);
   });
 });

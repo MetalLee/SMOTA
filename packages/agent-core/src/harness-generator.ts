@@ -16,25 +16,43 @@ export function generateHarnessBundle(input: ProjectCreationInput): HarnessBundl
       title: "确认产品目标",
       description: `围绕“${input.prompt}”明确目标用户、MVP 范围和不做事项。`,
       status: "done",
-      sortOrder: 1
+      sortOrder: 1,
+      agentName: "ProductAgent"
     },
     {
       title: "确认技术架构",
       description: "约束为 Vercel Sandbox Runner，避免 Local Runner 和 Fastify API。",
       status: "done",
-      sortOrder: 2
+      sortOrder: 2,
+      agentName: "ArchitectAgent"
     },
     {
       title: "生成 Roadmap",
       description: "拆分计划、验收标准和后续构建阶段。",
       status: "done",
-      sortOrder: 3
+      sortOrder: 3,
+      agentName: "PlannerAgent"
     },
     {
-      title: "等待用户批准计划",
-      description: "批准后才允许进入 Vercel Sandbox 构建阶段。",
+      title: "实现 MVP 应用",
+      description: "CodingAgent 根据 Harness 文档在 /workspace 生成应用。",
       status: "todo",
-      sortOrder: 4
+      sortOrder: 4,
+      agentName: "CodingAgent"
+    },
+    {
+      title: "安装并构建项目",
+      description: "BuildAgent 执行 pnpm install、pnpm build 和一次自动修复。",
+      status: "todo",
+      sortOrder: 5,
+      agentName: "BuildAgent"
+    },
+    {
+      title: "生成质量检视报告",
+      description: "ReviewerAgent 总结变更、构建结果和下一步建议。",
+      status: "todo",
+      sortOrder: 6,
+      agentName: "ReviewerAgent"
     }
   ];
 
@@ -203,13 +221,29 @@ ${fileSummary}
       title: "确认本次修改目标",
       description: `围绕“${input.changePrompt}”确认增量开发范围。`,
       status: "done",
-      sortOrder: 1
+      sortOrder: 1,
+      agentName: "ProductAgent"
     },
     {
       title: "基于已有文件执行修改",
       description: "CodingAgent 将复用当前 /workspace，不重新初始化项目。",
       status: "todo",
-      sortOrder: 2
+      sortOrder: 2,
+      agentName: "CodingAgent"
+    },
+    {
+      title: "安装并构建增量更改",
+      description: "BuildAgent 执行安装、构建和必要的一次自动修复。",
+      status: "todo",
+      sortOrder: 3,
+      agentName: "BuildAgent"
+    },
+    {
+      title: "生成本次继续开发报告",
+      description: "ReviewerAgent 总结本次增量变更和已知问题。",
+      status: "todo",
+      sortOrder: 4,
+      agentName: "ReviewerAgent"
     }
   ];
 
@@ -233,6 +267,186 @@ ${fileSummary}
       eventType: "agent.completed",
       step: "roadmap",
       message: "PlannerAgent 已生成本次继续开发计划。",
+      stream: "system"
+    }
+  ];
+
+  return { projectName, artifacts, tasks, events };
+}
+
+export function generatePlanRevisionHarnessBundle(input: {
+  originalPrompt: string;
+  revisionPrompt: string;
+  mode: ProjectCreationInput["mode"];
+  appType: ProjectCreationInput["appType"];
+  previousArtifacts: Array<{ path: string; content: string }>;
+}): HarnessBundle {
+  const projectName = deriveProjectName(input.revisionPrompt);
+  const previousSummary =
+    input.previousArtifacts
+      .slice(0, 5)
+      .map((artifact) => `## ${artifact.path}\n\n${artifact.content.slice(0, 1200)}`)
+      .join("\n\n---\n\n") || "暂无已有 Harness 文档。";
+  const artifacts: HarnessBundle["artifacts"] = [
+    {
+      type: "harness",
+      title: "Project Brief",
+      path: "PROJECT_BRIEF.md",
+      content: `# 项目简介
+
+## 本次计划修改目标
+
+${input.revisionPrompt}
+
+## 原始需求
+
+${input.originalPrompt}
+
+## 已有 Harness 摘要
+
+${previousSummary}
+
+## MVP 范围
+
+- 保留已有 Harness 中仍然有效的产品方向。
+- 按本次修改意见重新收敛 MVP。
+- 后续 CodingAgent 仅按照更新后的计划实现。
+
+## 不做事项
+
+- 不保留已被本次修改意见否定的旧任务。
+- 不在未经批准前启动 Sandbox 构建。`
+    },
+    {
+      type: "harness",
+      title: "Architecture",
+      path: "ARCHITECTURE.md",
+      content: `# 架构
+
+## 计划修订策略
+
+本轮基于已有 Harness 重新修改架构说明。原始需求为：${input.originalPrompt}
+
+## 本次影响范围
+
+${input.revisionPrompt}
+
+## Sandbox 策略
+
+待用户批准更新后的计划后，再启动 Vercel Sandbox 构建。`
+    },
+    {
+      type: "harness",
+      title: "Codex Task Rules",
+      path: "CODEX_TASK_RULES.md",
+      content: `# CODEX 任务规则
+
+- 基于更新后的 Harness 执行。
+- 用户可见文案优先使用简体中文。
+- 不在计划未批准时启动 CodingAgent 或 BuildAgent。`
+    },
+    {
+      type: "harness",
+      title: "Roadmap",
+      path: "ROADMAP.md",
+      content: `# 路线图
+
+## 计划修订
+
+目标：${input.revisionPrompt}
+
+任务：
+- 重新确认产品目标。
+- 更新架构和 UI 规范。
+- 重新生成开发任务。
+
+验收标准：
+- 计划内容体现本次修改意见。
+- 任务列表已重新生成。`
+    },
+    {
+      type: "harness",
+      title: "Agents",
+      path: "AGENTS.md",
+      content: `# AGENTS
+
+## ProductAgent
+
+基于已有 Harness 和用户新提示语重新确认产品目标。
+
+## ArchitectAgent
+
+基于修订后的产品目标更新架构和规则。
+
+## PlannerAgent
+
+重新生成 Roadmap 和任务列表。
+
+## CodingAgent
+
+仅在用户批准计划后执行。
+
+## BuildAgent
+
+构建和检查批准后的应用。
+
+## ReviewerAgent
+
+总结构建结果和后续建议。`
+    }
+  ];
+
+  const tasks: GeneratedTask[] = [
+    {
+      title: "确认计划修改目标",
+      description: `围绕“${input.revisionPrompt}”更新产品目标。`,
+      status: "done",
+      sortOrder: 1,
+      agentName: "ProductAgent"
+    },
+    {
+      title: "更新架构与任务规则",
+      description: "ArchitectAgent 根据本次修改意见更新架构和 CODEX 规则。",
+      status: "done",
+      sortOrder: 2,
+      agentName: "ArchitectAgent"
+    },
+    {
+      title: "重新生成开发计划",
+      description: "PlannerAgent 重新生成 Roadmap、AGENTS 和任务列表。",
+      status: "done",
+      sortOrder: 3,
+      agentName: "PlannerAgent"
+    },
+    {
+      title: "实现修订后的应用",
+      description: "CodingAgent 在用户批准后按更新后的 Harness 实现应用。",
+      status: "todo",
+      sortOrder: 4,
+      agentName: "CodingAgent"
+    }
+  ];
+
+  const events: GeneratedRunEvent[] = [
+    {
+      agentName: "ProductAgent",
+      eventType: "agent.completed",
+      step: "product-brief",
+      message: "ProductAgent 已基于用户新提示语修订项目简介。",
+      stream: "system"
+    },
+    {
+      agentName: "ArchitectAgent",
+      eventType: "agent.completed",
+      step: "architecture",
+      message: "ArchitectAgent 已修订架构和任务规则。",
+      stream: "system"
+    },
+    {
+      agentName: "PlannerAgent",
+      eventType: "agent.completed",
+      step: "roadmap",
+      message: "PlannerAgent 已重新生成计划任务。",
       stream: "system"
     }
   ];

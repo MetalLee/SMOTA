@@ -17,6 +17,7 @@ import {
   getAgentEventProgress,
   getTaskDisplayItems,
   shouldEnsurePreviewServer,
+  shouldReloadPreviewAfterRecovery,
   selectVisibleWorkspaceFiles,
   shouldReloadRunEvents,
   stripOuterMarkdownFence,
@@ -84,6 +85,12 @@ describe("workbench helpers", () => {
     expect(getTaskDisplayStatus("done", "running", "building")).toBe("done");
   });
 
+  it("marks unfinished plan tasks as failed when the run fails", () => {
+    expect(getTaskDisplayStatus("todo", "failed", "failed")).toBe("failed");
+    expect(getTaskDisplayStatus("in_progress", "failed", "failed")).toBe("failed");
+    expect(getTaskDisplayStatus("done", "failed", "failed")).toBe("done");
+  });
+
   it("surfaces the first unfinished plan task while CodingAgent is running", () => {
     expect(
       getTaskDisplayItems(
@@ -109,6 +116,32 @@ describe("workbench helpers", () => {
         "plan_ready"
       ).map((item) => `${item.displayStatus}:${item.task.id}`)
     ).toEqual(["todo:first", "todo:second"]);
+  });
+
+  it("syncs task display status from its assigned agent state", () => {
+    const agentStates = {
+      ProductAgent: "done",
+      ArchitectAgent: "done",
+      PlannerAgent: "done",
+      CodingAgent: "in_progress",
+      BuildAgent: "todo",
+      ReviewerAgent: "todo"
+    } as const;
+
+    expect(
+      getTaskDisplayItems(
+        [
+          { id: "planned", title: "鐢熸垚璁″垝", description: null, status: "todo", agent_name: "PlannerAgent", sort_order: 1, created_at: "2026-06-28T00:00:01.000Z" },
+          { id: "coded", title: "瀹炵幇椤甸潰", description: null, status: "todo", agent_name: "CodingAgent", sort_order: 2, created_at: "2026-06-28T00:00:02.000Z" },
+          { id: "built", title: "杩愯鏋勫缓", description: null, status: "todo", agent_name: "BuildAgent", sort_order: 3, created_at: "2026-06-28T00:00:03.000Z" },
+          { id: "reviewed", title: "鐢熸垚鎶ュ憡", description: null, status: "todo", agent_name: "ReviewerAgent", sort_order: 4, created_at: "2026-06-28T00:00:04.000Z" }
+        ],
+        "pending_approval",
+        "generating",
+        "plan_ready",
+        agentStates
+      ).map((item) => `${item.displayStatus}:${item.task.id}`)
+    ).toEqual(["done:planned", "in_progress:coded", "todo:built", "todo:reviewed"]);
   });
 
   it("derives agent display states from persisted events and sandbox progress", () => {
@@ -179,6 +212,58 @@ describe("workbench helpers", () => {
     ).toBe("todo");
   });
 
+  it("keeps sandbox agents waiting after approval until the sandbox workflow is running", () => {
+    expect(
+      getAgentDisplayStates({
+        runStatus: "approved",
+        currentStep: "approved_waiting_for_sandbox",
+        sandboxStatus: "previewing",
+        buildStatus: "succeeded",
+        eventAgentNames: ["ProductAgent", "ArchitectAgent", "PlannerAgent"]
+      })
+    ).toMatchObject({
+      CodingAgent: "todo",
+      BuildAgent: "todo",
+      ReviewerAgent: "todo"
+    });
+  });
+
+  it("does not complete CodingAgent or BuildAgent during the early preview bootstrap", () => {
+    expect(
+      getAgentDisplayStates({
+        runStatus: "running",
+        currentStep: "preview_ready",
+        sandboxStatus: "previewing",
+        buildStatus: null,
+        eventAgentNames: ["ProductAgent", "ArchitectAgent", "PlannerAgent"]
+      })
+    ).toMatchObject({
+      CodingAgent: "todo",
+      BuildAgent: "todo"
+    });
+  });
+
+  it("marks the failed sandbox agent as failed for bound tasks", () => {
+    const agentStates = getAgentDisplayStates({
+      runStatus: "failed",
+      currentStep: "build_failed",
+      sandboxStatus: "failed",
+      buildStatus: "failed",
+      eventAgentNames: ["ProductAgent", "ArchitectAgent", "PlannerAgent"]
+    });
+
+    expect(agentStates.BuildAgent).toBe("failed");
+    expect(
+      getTaskDisplayItems(
+        [{ id: "build", title: "杩愯鏋勫缓", description: null, status: "todo", agent_name: "BuildAgent", sort_order: 1, created_at: "2026-06-28T00:00:01.000Z" }],
+        "failed",
+        "failed",
+        "build_failed",
+        agentStates
+      )[0]?.displayStatus
+    ).toBe("failed");
+  });
+
   it("throttles automatic Sandbox preview recovery checks while the preview tab has a URL", () => {
     expect(shouldEnsurePreviewServer({ activeTab: "preview", previewUrl: "https://preview.example.dev", now: 1000 })).toBe(true);
     expect(shouldEnsurePreviewServer({ activeTab: "preview", previewUrl: null, now: 1000 })).toBe(false);
@@ -209,6 +294,12 @@ describe("workbench helpers", () => {
         cooldownMs: 60_000
       })
     ).toBe(true);
+  });
+
+  it("reloads recovered previews only when the current iframe has not loaded", () => {
+    expect(shouldReloadPreviewAfterRecovery({ previewRecovered: false, previewHealthy: false })).toBe(false);
+    expect(shouldReloadPreviewAfterRecovery({ previewRecovered: true, previewHealthy: true })).toBe(false);
+    expect(shouldReloadPreviewAfterRecovery({ previewRecovered: true, previewHealthy: false })).toBe(true);
   });
 
   it("removes only the outer markdown fence from artifact content", () => {

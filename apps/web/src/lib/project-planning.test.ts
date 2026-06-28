@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { buildPlaceholderProjectName, canStartContinuationRun, shouldAutoStartPlanning, shouldAutoStartSandbox } from "./project-planning";
+import {
+  buildPlaceholderProjectName,
+  canRevisePendingPlan,
+  canStartContinuationRun,
+  shouldAutoStartPlanning,
+  shouldAutoStartSandbox,
+  shouldDisablePlanApproval
+} from "./project-planning";
 
 describe("project planning helpers", () => {
   it("uses the first ten prompt characters plus ellipsis as the placeholder project name", () => {
@@ -27,5 +34,18 @@ describe("project planning helpers", () => {
     expect(canStartContinuationRun("planning")).toBe(false);
     expect(canStartContinuationRun("pending_approval")).toBe(false);
     expect(canStartContinuationRun("running")).toBe(false);
+  });
+
+  it("allows pending plans to be revised before approval", () => {
+    expect(canRevisePendingPlan("pending_approval", "plan_ready")).toBe(true);
+    expect(canRevisePendingPlan("planning", "planning_running")).toBe(false);
+    expect(canRevisePendingPlan("approved", "approved_waiting_for_sandbox")).toBe(false);
+  });
+
+  it("disables plan approval while a revision prompt is being edited or submitted", () => {
+    expect(shouldDisablePlanApproval("")).toBe(false);
+    expect(shouldDisablePlanApproval("   ")).toBe(false);
+    expect(shouldDisablePlanApproval("请改成深色模式")).toBe(true);
+    expect(shouldDisablePlanApproval("", true)).toBe(true);
   });
 });

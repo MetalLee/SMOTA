@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
-import { shouldEnsurePreviewServer } from "@/lib/workbench";
+import { shouldEnsurePreviewServer, shouldReloadPreviewAfterRecovery } from "@/lib/workbench";
 
 export function SharedProjectPreview({
   runId,
@@ -14,6 +14,7 @@ export function SharedProjectPreview({
   projectName: string;
 }) {
   const [reloadNonce, setReloadNonce] = useState(0);
+  const iframeLoadedRef = useRef(false);
   const [recovering, setRecovering] = useState(false);
   const recoveryRef = useRef<{ previewUrl: string | null; inFlight: boolean; lastAttemptAt: number | null }>({
     previewUrl: null,
@@ -27,6 +28,7 @@ export function SharedProjectPreview({
       recovery.previewUrl = previewUrl;
       recovery.inFlight = false;
       recovery.lastAttemptAt = null;
+      iframeLoadedRef.current = false;
     }
 
     if (!runId || !previewUrl) {
@@ -52,7 +54,7 @@ export function SharedProjectPreview({
       .then(async (response) => {
         if (!response.ok) return;
         const payload = (await response.json().catch(() => ({}))) as { previewRecovered?: boolean };
-        if (payload.previewRecovered) {
+        if (shouldReloadPreviewAfterRecovery({ previewRecovered: payload.previewRecovered, previewHealthy: iframeLoadedRef.current })) {
           setReloadNonce((value) => value + 1);
         }
       })
@@ -76,7 +78,27 @@ export function SharedProjectPreview({
           </div>
         </div>
       ) : null}
-      <iframe key={`${previewUrl}:${reloadNonce}`} title={`${projectName} 应用预览`} src={previewUrl} className="h-[66vh] min-h-[520px] w-full" />
+      <iframe
+        key={`${previewUrl}:${reloadNonce}`}
+        title={`${projectName} 应用预览`}
+        src={previewUrl}
+        onLoad={() => {
+          if (!runId) {
+            iframeLoadedRef.current = false;
+            return;
+          }
+
+          void fetch(`/api/runs/${runId}/preview/health`, { cache: "no-store" })
+            .then(async (response) => {
+              const payload = (await response.json().catch(() => ({}))) as { ok?: boolean };
+              iframeLoadedRef.current = response.ok && Boolean(payload.ok);
+            })
+            .catch(() => {
+              iframeLoadedRef.current = false;
+            });
+        }}
+        className="h-[66vh] min-h-[520px] w-full"
+      />
     </div>
   );
 }

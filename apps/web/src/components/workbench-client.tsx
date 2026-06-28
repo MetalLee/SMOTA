@@ -28,14 +28,15 @@ import {
   UploadCloud,
   XCircle
 } from "lucide-react";
-import { approvePlanAction, continueProjectAction, updateProjectShareAction } from "@/app/actions/projects";
+import { approvePlanAction, continueProjectAction, revisePlanAction, updateProjectShareAction } from "@/app/actions/projects";
 import { FileTreeTable } from "@/components/file-tree-table";
 import { PendingButton } from "@/components/pending-button";
 import { LoadingOverlay, RouteLoadingLink, WorkspaceLoadingLink } from "@/components/route-loading";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { canStartContinuationRun, shouldAutoStartPlanning, shouldAutoStartSandbox } from "@/lib/project-planning";
-import { buildProjectShareUrl, getShareActionItems, isProjectShareable } from "@/lib/project-sharing";
+import { shouldAutoStartClone } from "@/lib/project-clone";
+import { canRevisePendingPlan, canStartContinuationRun, shouldAutoStartPlanning, shouldAutoStartSandbox, shouldDisablePlanApproval } from "@/lib/project-planning";
+import { getShareActionItems, isProjectShareable } from "@/lib/project-sharing";
 import { cn } from "@/lib/utils";
 import {
   buildFileTree,
@@ -58,6 +59,7 @@ import {
   getWorkbenchHeaderActions,
   getWorkbenchLayoutClasses,
   shouldEnsurePreviewServer,
+  shouldReloadPreviewAfterRecovery,
   shouldShowWorkspaceNavigationOverlay,
   stripOuterMarkdownFence,
   type AgentDisplayName,
@@ -71,6 +73,7 @@ const MonacoEditor = dynamic(() => import("@monaco-editor/react"), {
 });
 
 const agents: AgentDisplayName[] = ["ProductAgent", "ArchitectAgent", "PlannerAgent", "CodingAgent", "BuildAgent", "ReviewerAgent"];
+const cloneStartRequests = new Set<string>();
 const tabIcons = {
   plan: FileText,
   preview: Monitor,
@@ -124,7 +127,10 @@ export function WorkbenchClient({
   const [workspaceNavigating, setWorkspaceNavigating] = useState(false);
   const [planningStarted, setPlanningStarted] = useState(false);
   const [sandboxAutoStarted, setSandboxAutoStarted] = useState(false);
+  const [cloneAutoStarted, setCloneAutoStarted] = useState(false);
   const [continuationSubmitting, setContinuationSubmitting] = useState(false);
+  const [planRevisionSubmitting, setPlanRevisionSubmitting] = useState(false);
+  const [previewHealthy, setPreviewHealthy] = useState(false);
   const [, startRefreshTransition] = useTransition();
   const previewRecoveryRef = useRef<{
     previewUrl: string | null;
@@ -197,7 +203,12 @@ export function WorkbenchClient({
       setArtifacts(payload.artifacts);
       setFiles(payload.files);
       setSandboxRun(payload.sandboxRun);
-      if (shouldReloadRunEvents(requestedRunId, payload.run.id)) {
+      const shouldReloadCurrentRunEvents =
+        requestedRunId === payload.run.id &&
+        run.status !== "planning" &&
+        payload.run.status === "planning" &&
+        payload.run.current_step === "planning_queued";
+      if (shouldReloadRunEvents(requestedRunId, payload.run.id) || shouldReloadCurrentRunEvents) {
         const nextEventsResponse = await fetch(`/api/runs/${payload.run.id}/events`, { cache: "no-store" });
         if (nextEventsResponse.ok) {
           const nextEventsPayload = (await nextEventsResponse.json()) as { events: RunEventRow[] };
@@ -224,11 +235,11 @@ export function WorkbenchClient({
       const payload = (await statusResponse.json()) as { run: AgentRunRow; sandboxRun: SandboxRunSnapshot | null; previewRecovered?: boolean };
       setRun(payload.run);
       setSandboxRun(payload.sandboxRun);
-      if (payload.previewRecovered) {
+      if (shouldReloadPreviewAfterRecovery({ previewRecovered: payload.previewRecovered, previewHealthy })) {
         setPreviewReloadNonce((value) => value + 1);
       }
     }
-  }, [activeTab, project.id, run.id, run.sandbox_preview_url, sandboxRun?.preview_url]);
+  }, [activeTab, previewHealthy, project.id, run.id, run.sandbox_preview_url, run.status, sandboxRun?.preview_url]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -240,7 +251,12 @@ export function WorkbenchClient({
   useEffect(() => {
     setPlanningStarted(false);
     setSandboxAutoStarted(false);
+    setCloneAutoStarted(false);
   }, [run.id]);
+
+  useEffect(() => {
+    setPreviewHealthy(false);
+  }, [currentPreviewUrl]);
 
   useEffect(() => {
     if (planningStarted || !shouldAutoStartPlanning(run.status, run.current_step)) {
@@ -254,6 +270,7 @@ export function WorkbenchClient({
   }, [planningStarted, refreshWorkspace, run.current_step, run.id, run.status]);
 
   const sandboxAutoStartPending = shouldAutoStartSandbox(run.status, run.current_step);
+  const cloneAutoStartPending = shouldAutoStartClone(run.status, run.current_step);
 
   async function startSandbox() {
     if (loadingAction !== null) return;
@@ -277,6 +294,27 @@ export function WorkbenchClient({
     void startSandbox();
   }, [sandboxAutoStartPending, sandboxAutoStarted]);
 
+  useEffect(() => {
+    if (cloneAutoStarted || !cloneAutoStartPending || cloneStartRequests.has(run.id)) {
+      return;
+    }
+
+    setCloneAutoStarted(true);
+    cloneStartRequests.add(run.id);
+    void fetch(`/api/runs/${run.id}/clone/start`, { method: "POST" })
+      .then(async (response) => {
+        if (!response.ok) {
+          cloneStartRequests.delete(run.id);
+        }
+      })
+      .catch(() => {
+        cloneStartRequests.delete(run.id);
+      })
+      .finally(() => {
+        void refreshWorkspace();
+      });
+  }, [cloneAutoStartPending, cloneAutoStarted, refreshWorkspace, run.id]);
+
   async function stopSandbox() {
     if (loadingAction !== null) return;
     setLoadingAction("stop");
@@ -298,6 +336,8 @@ export function WorkbenchClient({
       router.refresh();
     });
     await refreshWorkspace();
+    setPreviewHealthy(false);
+    setPreviewReloadNonce((value) => value + 1);
     setPreviewRefreshing(false);
   }
 
@@ -315,8 +355,30 @@ export function WorkbenchClient({
       await refreshWorkspace();
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "创建继续开发 Run 失败。");
+      throw error;
     } finally {
       setContinuationSubmitting(false);
+    }
+  }
+
+  async function revisePlan(prompt: string) {
+    if (planRevisionSubmitting || !canRevisePendingPlan(run.status, run.current_step)) return;
+    setPlanRevisionSubmitting(true);
+    setActionError(null);
+    const formData = new FormData();
+    formData.set("projectId", project.id);
+    formData.set("runId", run.id);
+    formData.set("prompt", prompt);
+
+    try {
+      await revisePlanAction(formData);
+      setPlanningStarted(false);
+      await refreshWorkspace();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "修改计划失败。");
+      throw error;
+    } finally {
+      setPlanRevisionSubmitting(false);
     }
   }
 
@@ -335,10 +397,13 @@ export function WorkbenchClient({
           controls={controls}
           loadingAction={loadingAction}
           continuationSubmitting={continuationSubmitting}
+          planRevisionSubmitting={planRevisionSubmitting}
           sandboxAutoStartPending={sandboxAutoStartPending}
           actionError={actionError}
           canContinue={canStartContinuationRun(run.status)}
+          canRevisePlan={canRevisePendingPlan(run.status, run.current_step)}
           onContinue={continueProject}
+          onRevisePlan={revisePlan}
           onStart={startSandbox}
           onStop={stopSandbox}
           layoutClasses={layoutClasses}
@@ -380,7 +445,16 @@ export function WorkbenchClient({
           {activeTab === "terminal" ? <TerminalTab events={events} /> : null}
           {activeTab === "files" ? <FilesTab projectId={project.id} files={files} sandboxStatus={run.sandbox_status ?? sandboxRun?.status ?? null} onNavigateStart={() => setWorkspaceNavigating(true)} /> : null}
           {activeTab === "editor" ? <EditorTab projectId={project.id} filePath={selectedFilePath} files={files} sandboxStatus={run.sandbox_status ?? sandboxRun?.status ?? null} /> : null}
-          {activeTab === "preview" ? <PreviewTab run={run} sandboxRun={sandboxRun} previewReloadNonce={previewReloadNonce} onRefresh={refreshAll} refreshing={previewRefreshing} /> : null}
+          {activeTab === "preview" ? (
+            <PreviewTab
+              run={run}
+              sandboxRun={sandboxRun}
+              previewReloadNonce={previewReloadNonce}
+              onPreviewLoaded={(healthy) => setPreviewHealthy(healthy)}
+              onRefresh={refreshAll}
+              refreshing={previewRefreshing}
+            />
+          ) : null}
           {workspaceNavigating ? <LoadingOverlay className={overlayClasses.workspaceOverlay} label="正在加载工作区" /> : null}
         </section>
       </main>
@@ -406,7 +480,6 @@ function WorkbenchHeaderShareActions({
   const menuRef = useRef<HTMLDivElement | null>(null);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const shareActions = useMemo(() => getShareActionItems(), []);
-  const shareUrl = typeof window === "undefined" ? `/share/${project.id}` : buildProjectShareUrl(window.location.origin, project.id);
 
   useEffect(() => {
     setShared(project.is_shared_to_discovery ?? true);
@@ -429,8 +502,13 @@ function WorkbenchHeaderShareActions({
   }, [shareOpen]);
 
   async function copyShareUrl() {
+    if (!previewUrl) {
+      setCopyState("failed");
+      return;
+    }
+
     try {
-      await navigator.clipboard.writeText(shareUrl);
+      await navigator.clipboard.writeText(previewUrl);
       setCopyState("copied");
     } catch {
       setCopyState("failed");
@@ -546,10 +624,13 @@ function AgentPanel({
   controls,
   loadingAction,
   continuationSubmitting,
+  planRevisionSubmitting,
   sandboxAutoStartPending,
   actionError,
   canContinue,
+  canRevisePlan,
   onContinue,
+  onRevisePlan,
   onStart,
   onStop,
   layoutClasses
@@ -561,10 +642,13 @@ function AgentPanel({
   controls: ReturnType<typeof getRunControls>;
   loadingAction: "start" | "stop" | null;
   continuationSubmitting: boolean;
+  planRevisionSubmitting: boolean;
   sandboxAutoStartPending: boolean;
   actionError: string | null;
   canContinue: boolean;
+  canRevisePlan: boolean;
   onContinue: (prompt: string) => Promise<void>;
+  onRevisePlan: (prompt: string) => Promise<void>;
   onStart: () => Promise<void>;
   onStop: () => Promise<void>;
   layoutClasses: ReturnType<typeof getWorkbenchLayoutClasses>;
@@ -572,10 +656,6 @@ function AgentPanel({
   const [continuationPrompt, setContinuationPrompt] = useState("");
   const agentProgress = useMemo(() => getAgentEventProgress(events), [events]);
   const agentDurationLabels = useMemo(() => getAgentDurationLabels(events), [events]);
-  const taskDisplayItems = useMemo(
-    () => getTaskDisplayItems(tasks, run.status, run.sandbox_status, run.current_step),
-    [run.current_step, run.sandbox_status, run.status, tasks]
-  );
   const dashboardHref = getDashboardHref();
   const agentStates = useMemo(
     () =>
@@ -589,6 +669,15 @@ function AgentPanel({
       }),
     [agentProgress, run.build_status, run.current_step, run.sandbox_status, run.status]
   );
+  const taskDisplayItems = useMemo(
+    () => getTaskDisplayItems(tasks, run.status, run.sandbox_status, run.current_step, agentStates),
+    [agentStates, run.current_step, run.sandbox_status, run.status, tasks]
+  );
+  const promptSubmitting = continuationSubmitting || planRevisionSubmitting;
+  const promptEnabled = canContinue || canRevisePlan;
+  const promptPlaceholder = canRevisePlan ? "描述你想如何修改计划" : "继续描述你想修改什么";
+  const submitLabel = canRevisePlan ? "提交计划修改" : "发起继续开发";
+  const approveDisabled = canRevisePlan && shouldDisablePlanApproval(continuationPrompt, planRevisionSubmitting);
 
   return (
     <div className={layoutClasses.agentPanel}>
@@ -623,6 +712,8 @@ function AgentPanel({
                     <CheckCircle2 className="h-4 w-4 text-emerald-500" />
                   ) : displayStatus === "in_progress" ? (
                     <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                  ) : displayStatus === "failed" ? (
+                    <XCircle className="h-4 w-4 text-red-500" />
                   ) : (
                     <Clock className="h-4 w-4 text-slate-300" />
                   )}
@@ -643,6 +734,8 @@ function AgentPanel({
                       <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
                     ) : displayStatus === "in_progress" ? (
                       <Loader2 className="h-4 w-4 shrink-0 animate-spin text-primary" />
+                    ) : displayStatus === "failed" ? (
+                      <XCircle className="h-4 w-4 shrink-0 text-red-500" />
                     ) : (
                       <Circle className="h-4 w-4 shrink-0 text-slate-300" />
                     )}
@@ -663,38 +756,38 @@ function AgentPanel({
           <form
             className={cn(
               "flex items-center gap-2 rounded-lg border border-border bg-slate-50 px-3 py-2 text-sm text-slate-500",
-              canContinue && "bg-white text-slate-700"
+              promptEnabled && "bg-white text-slate-700"
             )}
             onSubmit={(event) => {
               event.preventDefault();
-              if (!canContinue || continuationSubmitting) return;
+              if (!promptEnabled || promptSubmitting) return;
               const prompt = continuationPrompt.trim();
               if (prompt.length < 4) return;
-              setContinuationPrompt("");
-              void onContinue(prompt);
+              const submit = canRevisePlan ? onRevisePlan(prompt) : onContinue(prompt);
+              void submit.then(() => setContinuationPrompt("")).catch(() => undefined);
             }}
           >
             <input
               className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-slate-400 disabled:cursor-not-allowed"
-              placeholder="继续描述你想修改什么"
+              placeholder={promptPlaceholder}
               value={continuationPrompt}
-              disabled={!canContinue || continuationSubmitting}
+              disabled={!promptEnabled || promptSubmitting}
               onChange={(event) => setContinuationPrompt(event.target.value)}
             />
             <button
               type="submit"
-              disabled={!canContinue || continuationSubmitting || continuationPrompt.trim().length < 4}
+              disabled={!promptEnabled || promptSubmitting || continuationPrompt.trim().length < 4}
               className="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-ink disabled:cursor-not-allowed disabled:text-slate-300"
-              aria-label="发起继续开发"
+              aria-label={submitLabel}
             >
-              {continuationSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              {promptSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
             </button>
           </form>
           {controls.primaryAction === "approve" ? (
             <form action={approvePlanAction}>
               <input type="hidden" name="projectId" value={project.id} />
               <input type="hidden" name="runId" value={run.id} />
-              <PendingButton type="submit" className="w-full" pendingLabel="批准中">
+              <PendingButton type="submit" disabled={approveDisabled} className="w-full" pendingLabel="批准中">
                 批准计划
               </PendingButton>
             </form>
@@ -740,12 +833,14 @@ function PreviewTab({
   run,
   sandboxRun,
   previewReloadNonce,
+  onPreviewLoaded,
   onRefresh,
   refreshing
 }: {
   run: AgentRunRow;
   sandboxRun: SandboxRunSnapshot | null;
   previewReloadNonce: number;
+  onPreviewLoaded: (healthy: boolean) => void;
   onRefresh: () => Promise<void>;
   refreshing: boolean;
 }) {
@@ -782,7 +877,21 @@ function PreviewTab({
       {failed ? (
         <div className="flex flex-1 items-center justify-center p-8 text-center text-sm text-red-600">预览服务暂不可用，请检查 Sandbox 状态</div>
       ) : (
-        <iframe key={`${previewUrl}:${previewReloadNonce}`} title="Sandbox preview" src={previewUrl} onError={() => setFailed(true)} className="h-full w-full" />
+        <iframe
+          key={`${previewUrl}:${previewReloadNonce}`}
+          title="Sandbox preview"
+          src={previewUrl}
+          onLoad={() => {
+            void fetch(`/api/runs/${run.id}/preview/health`, { cache: "no-store" })
+              .then(async (response) => {
+                const payload = (await response.json().catch(() => ({}))) as { ok?: boolean };
+                onPreviewLoaded(response.ok && Boolean(payload.ok));
+              })
+              .catch(() => onPreviewLoaded(false));
+          }}
+          onError={() => setFailed(true)}
+          className="h-full w-full"
+        />
       )}
     </div>
   );

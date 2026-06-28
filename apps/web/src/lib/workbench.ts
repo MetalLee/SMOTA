@@ -1,5 +1,5 @@
 export type PrimaryRunAction = "approve" | "start" | "stop" | "complete" | "error" | "none";
-export type DisplayProgressStatus = "todo" | "in_progress" | "done";
+export type DisplayProgressStatus = "todo" | "in_progress" | "done" | "failed";
 export type AgentDisplayName = "ProductAgent" | "ArchitectAgent" | "PlannerAgent" | "CodingAgent" | "BuildAgent" | "ReviewerAgent";
 export type WorkbenchTabKey = "plan" | "preview" | "editor" | "terminal" | "files";
 
@@ -103,6 +103,7 @@ export interface AgentEventProgress {
 export interface TaskDisplayInput {
   id: string;
   status: string;
+  agent_name?: string | null;
   sort_order: number;
   created_at: string;
 }
@@ -180,6 +181,10 @@ export function shouldEnsurePreviewServer(params: {
   const now = params.now ?? Date.now();
   const cooldownMs = params.cooldownMs ?? 60_000;
   return now - lastAttemptAt >= cooldownMs;
+}
+
+export function shouldReloadPreviewAfterRecovery(params: { previewRecovered?: boolean; previewHealthy: boolean }): boolean {
+  return Boolean(params.previewRecovered) && !params.previewHealthy;
 }
 
 export function getWorkbenchTabs(): WorkbenchTabDefinition[] {
@@ -406,11 +411,32 @@ export function getExpandedDirectorySet(filePath: string): Set<string> {
 export function getTaskDisplayStatus(taskStatus: string, runStatus: string, sandboxStatus: string | null): DisplayProgressStatus {
   if (taskStatus === "done" || runStatus === "succeeded") return "done";
 
+  if (runStatus === "failed" || taskStatus === "failed") {
+    return "failed";
+  }
+
   if (taskStatus === "in_progress") {
     return "in_progress";
   }
 
   return "todo";
+}
+
+const AGENT_DISPLAY_NAMES: AgentDisplayName[] = ["ProductAgent", "ArchitectAgent", "PlannerAgent", "CodingAgent", "BuildAgent", "ReviewerAgent"];
+
+function isAgentDisplayName(value: string | null | undefined): value is AgentDisplayName {
+  return Boolean(value && AGENT_DISPLAY_NAMES.includes(value as AgentDisplayName));
+}
+
+function getTaskDisplayStatusFromAgent<T extends TaskDisplayInput>(
+  task: T,
+  agentStates?: Partial<Record<AgentDisplayName, DisplayProgressStatus>>
+): DisplayProgressStatus | null {
+  if (!agentStates || !isAgentDisplayName(task.agent_name)) {
+    return null;
+  }
+
+  return agentStates[task.agent_name] ?? null;
 }
 
 function isCodingTaskDisplayActive(runStatus: string, currentStep: string | null | undefined) {
@@ -422,18 +448,20 @@ function isCodingTaskDisplayActive(runStatus: string, currentStep: string | null
 const TASK_STATUS_ORDER: Record<DisplayProgressStatus, number> = {
   done: 0,
   in_progress: 1,
-  todo: 2
+  failed: 2,
+  todo: 3
 };
 
 export function getTaskDisplayItems<T extends TaskDisplayInput>(
   tasks: T[],
   runStatus: string,
   sandboxStatus: string | null,
-  currentStep?: string | null
+  currentStep?: string | null,
+  agentStates?: Partial<Record<AgentDisplayName, DisplayProgressStatus>>
 ): Array<TaskDisplayItem<T>> {
   const hasPersistedActiveTask = tasks.some((task) => task.status === "in_progress");
   const activeTaskId =
-    !hasPersistedActiveTask && isCodingTaskDisplayActive(runStatus, currentStep)
+    !agentStates && !hasPersistedActiveTask && isCodingTaskDisplayActive(runStatus, currentStep)
       ? [...tasks]
           .filter((task) => task.status !== "done")
           .sort((a, b) => {
@@ -445,10 +473,13 @@ export function getTaskDisplayItems<T extends TaskDisplayInput>(
       : null;
 
   return tasks
-    .map((task) => ({
-      task,
-      displayStatus: task.id === activeTaskId ? "in_progress" : getTaskDisplayStatus(task.status, runStatus, sandboxStatus)
-    }))
+    .map((task) => {
+      const agentStatus = getTaskDisplayStatusFromAgent(task, agentStates);
+      return {
+        task,
+        displayStatus: agentStatus ?? (task.id === activeTaskId ? "in_progress" : getTaskDisplayStatus(task.status, runStatus, sandboxStatus))
+      };
+    })
     .sort((a, b) => {
       const statusDelta = TASK_STATUS_ORDER[a.displayStatus] - TASK_STATUS_ORDER[b.displayStatus];
       if (statusDelta !== 0) return statusDelta;
@@ -464,20 +495,35 @@ export function getAgentDisplayStates(input: AgentDisplayStateInput): Record<Age
   const completedAgents = new Set(input.eventAgentNames);
   const activeAgents = new Set(input.activeAgentNames ?? []);
   const currentStep = input.currentStep?.toLowerCase() ?? "";
-  const sandboxStatus = input.sandboxStatus ?? "";
   const buildStatus = input.buildStatus ?? "";
   const runSucceeded = input.runStatus === "succeeded";
   const runWorkflowActive = input.runStatus === "running";
-  const sandboxStarted = runWorkflowActive && ["creating", "ready", "generating", "installing", "building", "fixing", "previewing"].includes(sandboxStatus);
-  const codingDone = runSucceeded || (runWorkflowActive && ["installing", "building", "fixing", "previewing"].includes(sandboxStatus)) || buildStatus === "running" || buildStatus === "succeeded";
-  const buildStarted = (runWorkflowActive && ["installing", "building", "fixing", "previewing"].includes(sandboxStatus)) || buildStatus === "running" || buildStatus === "succeeded";
+  const runFailed = input.runStatus === "failed";
+  const codingFailed =
+    runFailed &&
+    (currentStep.includes("opencode") || currentStep === "failed" || currentStep.includes("generating") || currentStep.includes("coding"));
+  const buildFailed = runFailed && (buildStatus === "failed" || currentStep.includes("build_failed") || currentStep.includes("fixing"));
+  const codingActive = runWorkflowActive && (currentStep.includes("running_opencode") || currentStep.includes("coding"));
+  const codingDone =
+    runSucceeded ||
+    (runWorkflowActive &&
+      (currentStep.includes("installing_after_opencode") ||
+        currentStep.includes("building") ||
+        currentStep.includes("fixing") ||
+        currentStep.includes("indexing_files") ||
+        buildStatus === "running" ||
+        buildStatus === "succeeded"));
+  const buildActive =
+    runWorkflowActive &&
+    (currentStep.includes("installing_after_opencode") || currentStep.includes("building") || currentStep.includes("fixing") || buildStatus === "running");
+  const buildDone = runSucceeded || (runWorkflowActive && buildStatus === "succeeded");
 
   return {
     ProductAgent: runSucceeded || completedAgents.has("ProductAgent") ? "done" : activeAgents.has("ProductAgent") || currentStep.includes("product") ? "in_progress" : "todo",
     ArchitectAgent: runSucceeded || completedAgents.has("ArchitectAgent") ? "done" : activeAgents.has("ArchitectAgent") || currentStep.includes("architect") ? "in_progress" : "todo",
     PlannerAgent: runSucceeded || completedAgents.has("PlannerAgent") ? "done" : activeAgents.has("PlannerAgent") || currentStep.includes("planner") ? "in_progress" : "todo",
-    CodingAgent: runSucceeded || codingDone ? "done" : sandboxStarted || currentStep.includes("coding") || currentStep.includes("opencode") ? "in_progress" : "todo",
-    BuildAgent: runSucceeded || buildStatus === "succeeded" || sandboxStatus === "previewing" ? "done" : buildStarted ? "in_progress" : "todo",
+    CodingAgent: codingFailed ? "failed" : codingDone ? "done" : codingActive ? "in_progress" : "todo",
+    BuildAgent: buildFailed ? "failed" : buildDone ? "done" : buildActive ? "in_progress" : "todo",
     ReviewerAgent: runSucceeded ? "done" : currentStep.includes("review") ? "in_progress" : "todo"
   };
 }

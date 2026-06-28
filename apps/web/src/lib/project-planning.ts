@@ -15,3 +15,11 @@ export function shouldAutoStartSandbox(runStatus: string, currentStep: string | 
 export function canStartContinuationRun(runStatus: string): boolean {
   return runStatus === "succeeded" || runStatus === "failed";
 }
+
+export function canRevisePendingPlan(runStatus: string, currentStep: string | null): boolean {
+  return runStatus === "pending_approval" && currentStep === "plan_ready";
+}
+
+export function shouldDisablePlanApproval(revisionPrompt: string, submitting = false): boolean {
+  return submitting || revisionPrompt.trim().length > 0;
+}

@@ -1,4 +1,3 @@
-import { headers } from "next/headers";
 import { Eye, GitFork, UserRound } from "lucide-react";
 import { ShareProjectActions } from "@/components/share-project-actions";
 import { RouteLoadingLink } from "@/components/route-loading";
@@ -6,14 +5,10 @@ import { Sidebar } from "@/components/sidebar";
 import { SharedProjectPreview } from "@/components/shared-project-preview";
 import { Card } from "@/components/ui/card";
 import { getSharedProjectData } from "@/lib/data";
-import { buildProjectShareUrl, getShareStatsLabels } from "@/lib/project-sharing";
+import { getShareStatsLabels } from "@/lib/project-sharing";
 
 export default async function SharedProjectPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const headerList = await headers();
-  const host = headerList.get("x-forwarded-host") ?? headerList.get("host") ?? "localhost:3000";
-  const protocol = headerList.get("x-forwarded-proto") ?? "http";
-  const shareUrl = buildProjectShareUrl(`${protocol}://${host}`, id);
   const { user, projects, project, runId, previewUrl, isFavorited, stats, creator } = await getSharedProjectData(id);
   const [viewLabel, cloneLabel] = getShareStatsLabels(stats);
 
@@ -44,7 +39,7 @@ export default async function SharedProjectPage({ params }: { params: Promise<{ 
                 </span>
               </div>
             </div>
-            <ShareProjectActions projectId={project.id} previewUrl={previewUrl} shareUrl={shareUrl} isFavorited={isFavorited} />
+            <ShareProjectActions projectId={project.id} projectName={project.name} previewUrl={previewUrl} isFavorited={isFavorited} />
           </div>
 
           <div className="mt-8 overflow-hidden rounded-lg border border-border bg-white shadow-sm">

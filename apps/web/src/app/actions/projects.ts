@@ -4,18 +4,15 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { parseProjectCreationInput } from "@smota/shared";
 import {
-  WORKSPACE_DIR,
-  buildSandboxName,
   buildSandboxRuntimeConfig,
   createSupabaseServiceClient,
-  createVercelSandbox,
-  getSandboxPreviewUrl,
-  getVercelSandbox,
-  sanitizeWorkspacePath
+  deleteVercelSandbox,
+  isVercelSandboxNotFoundError
 } from "@smota/sandbox-runner";
+import { buildClonedArtifactRows, buildCloneProjectName } from "@/lib/project-clone";
 import { isProjectShareable } from "@/lib/project-sharing";
 import { selectContinuationWorkspaceSource } from "@/lib/continuation-run";
-import { buildPlaceholderProjectName, canStartContinuationRun } from "@/lib/project-planning";
+import { buildPlaceholderProjectName, canRevisePendingPlan, canStartContinuationRun } from "@/lib/project-planning";
 import { createClient } from "@/lib/supabase/server";
 
 async function requireUser() {
@@ -83,6 +80,7 @@ export async function createProjectAction(formData: FormData) {
     title: "生成项目计划",
     description: "ProductAgent、ArchitectAgent 和 PlannerAgent 正在生成 Harness 文档。",
     status: "in_progress",
+    agent_name: "PlannerAgent",
     sort_order: 1
   });
 
@@ -147,9 +145,33 @@ export async function approvePlanAction(formData: FormData) {
 export async function deleteProjectAction(formData: FormData) {
   const projectId = String(formData.get("projectId") ?? "");
   const { supabase, user } = await requireUser();
+  const admin = createSupabaseServiceClient();
 
   if (!projectId) {
     throw new Error("缺少项目 ID。");
+  }
+
+  const [{ data: runs }, { data: sandboxRuns }] = await Promise.all([
+    admin.from("agent_runs").select("sandbox_name").eq("project_id", projectId).eq("owner_id", user.id),
+    admin.from("sandbox_runs").select("sandbox_name").eq("project_id", projectId).eq("owner_id", user.id)
+  ]);
+  const sandboxNames = [
+    ...new Set(
+      [...(runs ?? []), ...(sandboxRuns ?? [])]
+        .map((row) => (typeof row.sandbox_name === "string" ? row.sandbox_name.trim() : ""))
+        .filter(Boolean)
+    )
+  ];
+
+  for (const sandboxName of sandboxNames) {
+    try {
+      await deleteVercelSandbox(sandboxName);
+    } catch (error) {
+      if (!isVercelSandboxNotFoundError(error)) {
+        const message = error instanceof Error ? error.message : "删除 Vercel Sandbox 失败。";
+        throw new Error(`删除绑定的 Vercel Sandbox 失败：${sandboxName}。${message}`);
+      }
+    }
   }
 
   const { error } = await supabase.from("projects").delete().eq("id", projectId).eq("owner_id", user.id);
@@ -241,6 +263,7 @@ export async function continueProjectAction(formData: FormData) {
       title: "生成继续开发计划",
       description: "ProductAgent、ArchitectAgent 和 PlannerAgent 会基于已有文件生成增量计划。",
       status: "in_progress",
+      agent_name: "PlannerAgent",
       sort_order: 1
     }),
     supabase.from("run_events").insert({
@@ -262,6 +285,69 @@ export async function continueProjectAction(formData: FormData) {
 
   revalidatePath(`/projects/${projectId}`);
   return { runId: run.id };
+}
+
+export async function revisePlanAction(formData: FormData) {
+  const projectId = String(formData.get("projectId") ?? "");
+  const runId = String(formData.get("runId") ?? "");
+  const prompt = String(formData.get("prompt") ?? "").replace(/\s+/g, " ").trim();
+  const { supabase, user } = await requireUser();
+
+  if (!projectId || !runId) {
+    throw new Error("缺少项目或 Run ID。");
+  }
+
+  if (prompt.length < 4) {
+    throw new Error("请输入至少 4 个字符的计划修改意见。");
+  }
+
+  const { data: run } = await supabase
+    .from("agent_runs")
+    .select("status,current_step")
+    .eq("id", runId)
+    .eq("project_id", projectId)
+    .eq("owner_id", user.id)
+    .single();
+
+  if (!run || !canRevisePendingPlan(String(run.status), typeof run.current_step === "string" ? run.current_step : null)) {
+    throw new Error("只有待批准的计划可以在批准前修改。");
+  }
+
+  const now = new Date().toISOString();
+  const { error: updateError } = await supabase
+    .from("agent_runs")
+    .update({
+      user_prompt: prompt,
+      status: "planning",
+      current_step: "planning_queued",
+      updated_at: now
+    })
+    .eq("id", runId)
+    .eq("project_id", projectId)
+    .eq("owner_id", user.id);
+
+  if (updateError) {
+    throw new Error(updateError.message);
+  }
+
+  const { error: eventError } = await supabase.from("run_events").insert({
+    owner_id: user.id,
+    project_id: projectId,
+    run_id: runId,
+    agent_name: null,
+    event_type: "plan.revision.requested",
+    step: "planning_queued",
+    message: "用户提交了计划修改意见，ProductAgent、ArchitectAgent 和 PlannerAgent 将基于已有 Harness 重新生成计划。",
+    stream: "system",
+    metadata: { prompt }
+  });
+
+  if (eventError) {
+    throw new Error(eventError.message);
+  }
+
+  revalidatePath(`/projects/${projectId}`);
+  return { runId };
 }
 
 export async function updateProjectShareAction(formData: FormData) {
@@ -332,6 +418,7 @@ export async function toggleFavoriteProjectAction(formData: FormData) {
 
 export async function cloneSharedProjectAction(formData: FormData) {
   const sourceProjectId = String(formData.get("projectId") ?? "");
+  const requestedProjectName = String(formData.get("projectName") ?? "");
   const { user } = await requireUser();
   const admin = createSupabaseServiceClient();
 
@@ -350,33 +437,27 @@ export async function cloneSharedProjectAction(formData: FormData) {
     throw new Error(projectError?.message ?? "共享项目不存在。");
   }
 
-  const { data: sourceRuns } = await admin
-    .from("agent_runs")
-    .select("*")
+  const { data: sourceSandboxRuns } = await admin
+    .from("sandbox_runs")
+    .select("preview_image_url")
     .eq("project_id", sourceProjectId)
-    .not("sandbox_name", "is", null)
-    .order("created_at", { ascending: false })
+    .order("updated_at", { ascending: false })
     .limit(1);
-  const sourceRun = sourceRuns?.[0] as Record<string, unknown> | undefined;
-  const sourceSandboxName = typeof sourceRun?.sandbox_name === "string" ? sourceRun.sandbox_name : "";
-  if (!sourceSandboxName) {
-    throw new Error("源项目没有可复制的 Sandbox。");
-  }
-
-  const { data: sourceFiles } = await admin
-    .from("workspace_files")
-    .select("path,file_type,change_type,size,last_modified_at")
+  const sourcePreviewImageUrl =
+    typeof sourceSandboxRuns?.[0]?.preview_image_url === "string" && sourceSandboxRuns[0].preview_image_url.trim()
+      ? sourceSandboxRuns[0].preview_image_url.trim()
+      : null;
+  const { data: sourceArtifacts } = await admin
+    .from("artifacts")
+    .select("type,title,path,content,created_at")
     .eq("project_id", sourceProjectId)
-    .order("path", { ascending: true });
-  if (!sourceFiles?.length) {
-    throw new Error("源项目没有可复制的工程文件。");
-  }
+    .order("created_at", { ascending: true });
 
   const { data: clonedProject, error: cloneProjectError } = await admin
     .from("projects")
     .insert({
       owner_id: user.id,
-      name: `${sourceProject.name}（克隆）`,
+      name: buildCloneProjectName(String(sourceProject.name ?? ""), requestedProjectName),
       description: sourceProject.description,
       prompt: sourceProject.prompt,
       app_type: sourceProject.app_type,
@@ -400,13 +481,13 @@ export async function cloneSharedProjectAction(formData: FormData) {
       project_id: clonedProject.id,
       mode: sourceProject.mode,
       user_prompt: sourceProject.prompt,
-      status: "succeeded",
-      current_step: "cloned_previewing",
+      status: "running",
+      current_step: "clone_queued",
       runner_provider: "vercel_sandbox",
-      sandbox_status: "creating",
+      sandbox_status: "pending",
       sandbox_runtime: runtimeConfig.runtime,
       sandbox_timeout_ms: runtimeConfig.timeoutMs,
-      build_status: "succeeded",
+      build_status: "pending",
       fix_attempted: false
     })
     .select("*")
@@ -416,71 +497,44 @@ export async function cloneSharedProjectAction(formData: FormData) {
     throw new Error(cloneRunError?.message ?? "创建克隆运行记录失败。");
   }
 
-  const sandboxName = buildSandboxName({ ownerId: user.id, projectId: clonedProject.id, runId: clonedRun.id });
-  const sandbox = await createVercelSandbox({ name: sandboxName, config: runtimeConfig });
-  const previewUrl = getSandboxPreviewUrl(sandbox, runtimeConfig.publishPort);
-  const sourceSandbox = await getVercelSandbox(sourceSandboxName);
-  const filesToWrite = [];
-
-  for (const file of sourceFiles as Array<{ path: string }>) {
-    const safePath = sanitizeWorkspacePath(file.path);
-    const content = await sourceSandbox.readFileToBuffer({ path: `${WORKSPACE_DIR}/${safePath}` });
-    if (!content) {
-      throw new Error(`源项目文件不可读取：${safePath}`);
-    }
-    filesToWrite.push({ path: `${WORKSPACE_DIR}/${safePath}`, content });
-  }
-
-  await sandbox.writeFiles(filesToWrite);
-  await sandbox.runCommand({
-    cmd: "sh",
-    args: ["-lc", "pnpm install && pnpm dev --host 0.0.0.0 --port 5173 --strictPort"],
-    cwd: WORKSPACE_DIR,
-    detached: true,
-    timeoutMs: runtimeConfig.timeoutMs
+  const clonedArtifactRows = buildClonedArtifactRows(sourceArtifacts ?? [], {
+    ownerId: user.id,
+    projectId: clonedProject.id,
+    runId: clonedRun.id
   });
 
   await Promise.all([
-    admin
-      .from("agent_runs")
-      .update({
-        sandbox_name: sandboxName,
-        sandbox_status: "previewing",
-        sandbox_preview_url: previewUrl,
-        updated_at: new Date().toISOString()
-      })
-      .eq("id", clonedRun.id),
+    clonedArtifactRows.length ? admin.from("artifacts").insert(clonedArtifactRows) : Promise.resolve({ error: null }),
     admin.from("sandbox_runs").insert({
       owner_id: user.id,
       project_id: clonedProject.id,
       run_id: clonedRun.id,
-      sandbox_name: sandboxName,
-      status: "previewing",
+      sandbox_name: null,
+      status: "pending",
       runtime: runtimeConfig.runtime,
       timeout_ms: runtimeConfig.timeoutMs,
       publish_port: runtimeConfig.publishPort,
-      preview_url: previewUrl
+      preview_url: null,
+      preview_image_url: sourcePreviewImageUrl
     }),
-    admin.from("workspace_files").insert(
-      (sourceFiles as Array<Record<string, unknown>>).map((file) => ({
-        owner_id: user.id,
-        project_id: clonedProject.id,
-        run_id: clonedRun.id,
-        path: file.path,
-        file_type: file.file_type,
-        change_type: "cloned",
-        size: file.size,
-        last_modified_at: file.last_modified_at
-      }))
-    ),
+    admin.from("tasks").insert({
+      owner_id: user.id,
+      project_id: clonedProject.id,
+      run_id: clonedRun.id,
+      title: "克隆项目工作区",
+      description: "正在复制源项目文件并启动新的 Vercel Sandbox 预览。",
+      status: "in_progress",
+      agent_name: "CodingAgent",
+      sort_order: 1
+    }),
     admin.from("run_events").insert({
       owner_id: user.id,
       project_id: clonedProject.id,
       run_id: clonedRun.id,
       agent_name: null,
-      event_type: "project.cloned",
-      step: "clone",
-      message: "项目已从发现克隆，并已启动新的 Sandbox 预览。",
+      event_type: "project.clone.queued",
+      step: "clone_queued",
+      message: "已创建克隆项目，正在准备复制源项目工作区。",
       stream: "system",
       metadata: { sourceProjectId }
     })
@@ -493,5 +547,5 @@ export async function cloneSharedProjectAction(formData: FormData) {
 
   revalidatePath("/my-projects");
   revalidatePath(`/share/${sourceProjectId}`);
-  redirect(`/projects/${clonedProject.id}`);
+  return { projectId: String(clonedProject.id) };
 }
