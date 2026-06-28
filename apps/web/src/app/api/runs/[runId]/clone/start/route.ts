@@ -11,10 +11,12 @@ import {
   getSandboxPreviewUrl,
   getVercelSandbox,
   runSandboxCommand,
-  scanWorkspaceFiles
+  scanWorkspaceFiles,
+  startDetachedSandboxCommand
 } from "@smota/sandbox-runner";
 import {
   buildCloneCommandFailureMessage,
+  buildCloneDependencyInstallCommand,
   buildCloneWorkspaceArchiveCommand,
   buildExtractCloneWorkspaceArchiveCommand,
   buildCloneStepFailureMessage,
@@ -26,12 +28,8 @@ import {
 import { createClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
-export const maxDuration = 300;
+export const maxDuration = 800;
 export const dynamic = "force-dynamic";
-
-function quoteArgs(args: string[]) {
-  return args.map((arg) => `'${arg.replaceAll("'", "'\\''")}'`).join(" ");
-}
 
 async function insertRunEvent(
   admin: ReturnType<typeof createSupabaseServiceClient>,
@@ -245,29 +243,50 @@ export async function POST(_request: Request, { params }: { params: Promise<{ ru
         .eq("run_id", runId)
     ]);
 
-    await insertRunEvent(admin, { ...context, eventType: "project.clone.preview.started", step: "start_clone_preview", message: "正在安装依赖并启动克隆预览。" });
-    const previewFinished = await runSandboxCommand({
+    await insertRunEvent(admin, {
+      ...context,
+      eventType: "project.clone.dependencies.started",
+      step: "install_clone_dependencies",
+      message: "正在安装克隆项目依赖。"
+    });
+    const installFinished = await runSandboxCommand({
+      supabase: admin,
+      context,
+      sandbox,
+      step: "install_clone_dependencies",
+      cmd: "bash",
+      args: ["-lc", buildCloneDependencyInstallCommand()],
+      cwd: WORKSPACE_DIR,
+      timeoutMs: config.timeoutMs
+    }).catch((error) => {
+      throw new Error(buildCloneStepFailureMessage("安装克隆项目依赖命令失败。", error));
+    });
+    if (installFinished.exitCode !== 0) {
+      throw new Error(buildCloneCommandFailureMessage("克隆项目依赖安装失败。", await commandOutput(installFinished)));
+    }
+
+    await Promise.all([
+      admin.from("agent_runs").update({ current_step: "start_clone_preview", sandbox_status: "previewing", updated_at: new Date().toISOString() }).eq("id", runId),
+      admin.from("sandbox_runs").update({ status: "previewing", updated_at: new Date().toISOString() }).eq("run_id", runId)
+    ]);
+    await insertRunEvent(admin, {
+      ...context,
+      eventType: "project.clone.preview.started",
+      step: "start_clone_preview",
+      message: "正在启动克隆预览。"
+    });
+    await startDetachedSandboxCommand({
       supabase: admin,
       context,
       sandbox,
       step: "start_clone_preview",
-      cmd: "bash",
-      args: [
-        "-lc",
-        [
-          "corepack enable >/dev/null 2>&1 || true",
-          "pnpm install",
-          `nohup pnpm ${quoteArgs(buildViteDevServerArgs(config.publishPort))} > .smota-preview-server.log 2>&1 &`
-        ].join(" && ")
-      ],
+      cmd: "pnpm",
+      args: buildViteDevServerArgs(config.publishPort),
       cwd: WORKSPACE_DIR,
       timeoutMs: config.timeoutMs
     }).catch((error) => {
       throw new Error(buildCloneStepFailureMessage("启动克隆项目预览命令失败。", error));
     });
-    if (previewFinished.exitCode !== 0) {
-      throw new Error(buildCloneCommandFailureMessage("克隆项目预览启动失败。", await commandOutput(previewFinished)));
-    }
 
     await scanWorkspaceFiles({ sandbox, supabase: admin, context, phase: "clone_workspace" });
 
