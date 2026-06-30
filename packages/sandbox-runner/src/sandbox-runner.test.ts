@@ -3,20 +3,25 @@ import {
   buildCodingAgentPrompt,
   buildContinuationCodingAgentPrompt,
   buildGitSetupShellCommand,
+  markAgentTasksDone,
   buildOpenCodeConfig,
   buildOpenCodeRunShellCommand,
   buildPreviewServerEnsureShellCommand,
   buildRealtimeSandboxPhasePlan,
+  buildSandboxWorkflowLease,
   buildViteDevServerArgs,
   buildVitePreviewConfigContent,
   ensureSandboxPreviewServer,
   buildSandboxCodingAgentEnvironment,
   buildSandboxName,
   buildSandboxRuntimeConfig,
+  getSandboxWorkflowStartState,
   getVercelSandboxToken,
+  isSandboxWorkflowLeaseExpired,
   isVercelSandboxNotFoundError,
   isProbablyBinary,
   scanWorkspaceFiles,
+  shouldDispatchSandboxWorkflowJob,
   sanitizeWorkspacePath,
   toSandboxEnvironment
 } from "./index";
@@ -38,6 +43,45 @@ describe("sandbox runner helpers", () => {
       timeoutMs: 2700000,
       publishPort: 5173
     });
+  });
+
+  it("classifies Sandbox workflow starts for idempotent async dispatch", () => {
+    expect(getSandboxWorkflowStartState("approved", "approved_waiting_for_sandbox")).toBe("claimable");
+    expect(getSandboxWorkflowStartState("failed_retryable", "build_failed")).toBe("claimable");
+    expect(getSandboxWorkflowStartState("running", "sandbox_start_queued")).toBe("already_running");
+    expect(getSandboxWorkflowStartState("running", "building")).toBe("already_running");
+    expect(getSandboxWorkflowStartState("succeeded", "succeeded")).toBe("finished");
+    expect(getSandboxWorkflowStartState("failed", "failed")).toBe("finished");
+    expect(getSandboxWorkflowStartState("planning", "planning_queued")).toBe("invalid");
+  });
+
+  it("expires Sandbox workflow leases only after their deadline", () => {
+    expect(isSandboxWorkflowLeaseExpired(null, new Date("2026-06-30T12:00:00.000Z"))).toBe(true);
+    expect(isSandboxWorkflowLeaseExpired("2026-06-30T11:59:59.999Z", new Date("2026-06-30T12:00:00.000Z"))).toBe(true);
+    expect(isSandboxWorkflowLeaseExpired("2026-06-30T12:00:00.001Z", new Date("2026-06-30T12:00:00.000Z"))).toBe(false);
+  });
+
+  it("builds a Sandbox workflow lease from the worker clock", () => {
+    expect(
+      buildSandboxWorkflowLease({
+        workerId: "worker-a",
+        now: new Date("2026-06-30T12:00:00.000Z"),
+        leaseMs: 90_000
+      })
+    ).toEqual({
+      lease_owner: "worker-a",
+      lease_expires_at: "2026-06-30T12:01:30.000Z"
+    });
+  });
+
+  it("dispatches queued and expired Sandbox workflow jobs only", () => {
+    const now = new Date("2026-06-30T12:00:00.000Z");
+
+    expect(shouldDispatchSandboxWorkflowJob({ status: "queued", lease_expires_at: null }, now)).toBe(true);
+    expect(shouldDispatchSandboxWorkflowJob({ status: "running", lease_expires_at: "2026-06-30T11:59:59.000Z" }, now)).toBe(true);
+    expect(shouldDispatchSandboxWorkflowJob({ status: "running", lease_expires_at: "2026-06-30T12:01:00.000Z" }, now)).toBe(false);
+    expect(shouldDispatchSandboxWorkflowJob({ status: "succeeded", lease_expires_at: null }, now)).toBe(false);
+    expect(shouldDispatchSandboxWorkflowJob({ status: "failed", lease_expires_at: null }, now)).toBe(false);
   });
 
   it("resolves Vercel Sandbox tokens from Sandbox token, OIDC token, then Vercel token", () => {
@@ -128,6 +172,9 @@ describe("sandbox runner helpers", () => {
       ],
       artifacts: [
         { path: "PROJECT_BRIEF.md", content: "# Brief\nUse Vite." },
+        { path: "ARCHITECTURE.md", content: "# Architecture\nRoot Vite app." },
+        { path: "CODEX_TASK_RULES.md", content: "# Rules\nUse /workspace." },
+        { path: "ROADMAP.md", content: "# Roadmap\nNoisy plan." },
         { path: "AGENTS.md", content: "# Agents\nUse CodingAgent." }
       ],
       taskUpdateUrl: "https://smota.example/api/runs/run-1",
@@ -140,11 +187,21 @@ describe("sandbox runner helpers", () => {
     expect(prompt).not.toContain("Run production build");
     expect(prompt).not.toContain("Task ID: task-build");
     expect(prompt).toContain("Approved tasks are the only task list");
+    expect(prompt).toContain("Every CodingAgent task that you finish must be marked done through the HTTP API before your final response.");
+    expect(prompt).toContain("Do not update BuildAgent, ReviewerAgent, ProductAgent, ArchitectAgent, or PlannerAgent tasks.");
     expect(prompt).toContain("curl -fsS -X POST");
     expect(prompt).toContain("https://smota.example/api/runs/run-1/tasks/<taskId>/status");
     expect(prompt).toContain("SMOTA_TASK_UPDATE_TOKEN");
     expect(prompt).toContain("PROJECT_BRIEF.md");
+    expect(prompt).toContain("ARCHITECTURE.md");
+    expect(prompt).toContain("CODEX_TASK_RULES.md");
+    expect(prompt).not.toContain("ROADMAP.md");
+    expect(prompt).not.toContain("# Roadmap");
+    expect(prompt).not.toContain("AGENTS.md");
+    expect(prompt).not.toContain("# Agents");
     expect(prompt).toContain("All generated application code must stay inside /workspace.");
+    expect(prompt).toContain("Treat /workspace as the Vite project root");
+    expect(prompt).toContain("Do not create a nested app root");
     expect(prompt).toContain("简体中文");
   });
 
@@ -163,7 +220,13 @@ describe("sandbox runner helpers", () => {
         { id: "task-filter", title: "实现筛选器", description: "保持现有风格", status: "todo", agentName: "CodingAgent" },
         { id: "task-review", title: "生成质量报告", description: "ReviewerAgent 总结结果", status: "todo", agentName: "ReviewerAgent" }
       ],
-      artifacts: [{ path: "ROADMAP.md", content: "# 路线图\n增量修改" }],
+      artifacts: [
+        { path: "PROJECT_BRIEF.md", content: "# 项目简介\n增量目标" },
+        { path: "ARCHITECTURE.md", content: "# 架构\n已有根目录" },
+        { path: "CODEX_TASK_RULES.md", content: "# 规则\n不要重建" },
+        { path: "ROADMAP.md", content: "# 路线图\n增量修改" },
+        { path: "AGENTS.md", content: "# AGENTS\nCodingAgent" }
+      ],
       workspaceFiles: ["package.json", "src/App.tsx"],
       taskUpdateUrl: "https://smota.example/api/runs/run-2",
       taskUpdateTokenEnvName: "SMOTA_TASK_UPDATE_TOKEN"
@@ -176,13 +239,74 @@ describe("sandbox runner helpers", () => {
     expect(prompt).not.toContain("生成质量报告");
     expect(prompt).not.toContain("Task ID: task-review");
     expect(prompt).toContain("Approved tasks are the only task list");
+    expect(prompt).toContain("Every CodingAgent task that you finish must be marked done through the HTTP API before your final response.");
+    expect(prompt).toContain("Do not update BuildAgent, ReviewerAgent, ProductAgent, ArchitectAgent, or PlannerAgent tasks.");
     expect(prompt).toContain("不要重新初始化、重建或覆盖整个项目");
     expect(prompt).toContain("src/App.tsx");
+    expect(prompt).toContain("PROJECT_BRIEF.md");
+    expect(prompt).toContain("ARCHITECTURE.md");
+    expect(prompt).toContain("CODEX_TASK_RULES.md");
+    expect(prompt).not.toContain("ROADMAP.md");
+    expect(prompt).not.toContain("AGENTS.md");
   });
 
   it("builds OpenCode run commands for the DeepSeek v4 Pro build agent", () => {
     expect(buildOpenCodeRunShellCommand("opencode", "deepseek/deepseek-v4-pro", "hello")).toBe(
       "opencode run --model deepseek/deepseek-v4-pro --agent build --dangerously-skip-permissions 'hello'"
+    );
+  });
+
+  it("marks all tasks assigned to an agent done as a platform fallback", async () => {
+    const calls: Array<{ table: string; action: string; value?: unknown; column?: string; match?: unknown }> = [];
+    const makeBuilder = (table: string) => ({
+      update(value: unknown) {
+        calls.push({ table, action: "update", value });
+        return this;
+      },
+      insert(value: unknown) {
+        calls.push({ table, action: "insert", value });
+        return Promise.resolve({ error: null });
+      },
+      eq(column: string, match: unknown) {
+        calls.push({ table, action: "eq", column, match });
+        return this;
+      },
+      neq(column: string, match: unknown) {
+        calls.push({ table, action: "neq", column, match });
+        return Promise.resolve({ error: null });
+      }
+    });
+    const supabase = {
+      from(table: string) {
+        return makeBuilder(table);
+      }
+    };
+
+    await markAgentTasksDone(
+      supabase as never,
+      { ownerId: "owner-1", projectId: "project-1", runId: "run-1" },
+      "BuildAgent"
+    );
+
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ table: "tasks", action: "update", value: expect.objectContaining({ status: "done" }) }),
+        { table: "tasks", action: "eq", column: "run_id", match: "run-1" },
+        { table: "tasks", action: "eq", column: "owner_id", match: "owner-1" },
+        { table: "tasks", action: "eq", column: "project_id", match: "project-1" },
+        { table: "tasks", action: "eq", column: "agent_name", match: "BuildAgent" },
+        { table: "tasks", action: "neq", column: "status", match: "done" },
+        expect.objectContaining({
+          table: "run_events",
+          action: "insert",
+          value: expect.objectContaining({
+            run_id: "run-1",
+            agent_name: "BuildAgent",
+            event_type: "task.status.updated",
+            payload: { agentName: "BuildAgent", status: "done" }
+          })
+        })
+      ])
     );
   });
 

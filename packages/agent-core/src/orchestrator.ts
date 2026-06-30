@@ -148,13 +148,18 @@ async function generateJson<T>(input: {
     responseFormat: "json_object",
     stream: true
   });
+  const parsed = parseJsonObjectFromText(result.content) as T;
   await recordEvent(input.events, input.callbacks, createEvent(input.agentName, "agent.completed", input.step, `${input.agentName} completed.`));
-  return parseJsonObjectFromText(result.content) as T;
+  return parsed;
 }
 
 function productPrompt(input: ProjectCreationInput): string {
   return [
     SIMPLIFIED_CHINESE_OUTPUT_INSTRUCTION,
+    "",
+    "运行环境约束：Sandbox 已在 /workspace 初始化 Vite React TypeScript 应用，/workspace 就是应用根目录。",
+    "不得规划或要求创建新的项目根目录，例如 gomoku/、todo-app/、app/ 等。",
+    "不得把 index.html、package.json、src/、public/、vite.config.ts 放入某个新子目录；所有应用入口和源码都应位于 /workspace 根及其标准子目录内。",
     "",
     `用户需求：${input.prompt}`,
     `应用类型：${input.appType}`,
@@ -173,6 +178,10 @@ function architectPrompt(input: ProjectCreationInput, projectBrief: string): str
   return [
     SIMPLIFIED_CHINESE_OUTPUT_INSTRUCTION,
     "",
+    "运行环境约束：Sandbox 已在 /workspace 初始化 Vite React TypeScript 应用，/workspace 就是应用根目录。",
+    "架构文档的项目结构必须以 /workspace 根目录为应用根，不要规划或创建 gomoku/、todo-app/、app/ 等新的项目根目录。",
+    "不要把 index.html、package.json、src/、public/、vite.config.ts 放入某个新子目录；如需分层，只能在 /workspace/src 下拆分组件、状态和样式模块。",
+    "",
     `用户需求：${input.prompt}`,
     "",
     "PROJECT_BRIEF.md:",
@@ -189,6 +198,10 @@ function architectPrompt(input: ProjectCreationInput, projectBrief: string): str
 function plannerPrompt(input: ProjectCreationInput, projectBrief: string, architecture: string): string {
   return [
     SIMPLIFIED_CHINESE_OUTPUT_INSTRUCTION,
+    "",
+    "运行环境约束：CodingAgent 将在已有 /workspace Vite React TypeScript 根目录执行。",
+    "Roadmap、AGENTS 和 tasks 必须要求在 /workspace 根应用内修改文件，不要规划或创建 gomoku/、todo-app/、app/ 等新的项目根目录。",
+    "不要把 index.html、package.json、src/、public/、vite.config.ts 放入某个新子目录；任务应指向 /workspace/src 等标准位置。",
     "",
     `用户需求：${input.prompt}`,
     "",
@@ -225,6 +238,8 @@ function continuationContext(input: ContinuationHarnessInput): string {
     "",
     `当前场景：${sourceLabel}`,
     "这是对已有 /workspace 应用的继续开发，不要从空项目重新生成，不要完全覆盖既有方向。",
+    "当前 /workspace 就是应用根目录；不要规划或创建新的项目根目录，例如 gomoku/、todo-app/、app/ 等。",
+    "不要把 index.html、package.json、src/、public/、vite.config.ts 移入某个新子目录；如需新增模块，应放在现有 /workspace/src 下。",
     `原始项目需求：${input.originalPrompt}`,
     `本次用户修改需求：${input.changePrompt}`,
     `应用类型：${input.appType}`,

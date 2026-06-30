@@ -8,6 +8,7 @@ import {
 import type { AgentOrchestratorCallbacks } from "@smota/agent-core";
 import type { GeneratedRunEvent, GeneratedTask, HarnessArtifact, ProjectCreationInput } from "@smota/shared";
 import { selectContinuationWorkspaceSource } from "@/lib/continuation-run";
+import { getNextPlanningGeneration, isCurrentPlanningGeneration } from "@/lib/project-planning";
 import { createClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -35,8 +36,13 @@ function normalizeMode(mode: string): ProjectCreationInput["mode"] {
 async function insertEvent(
   supabase: Awaited<ReturnType<typeof createClient>>,
   context: { ownerId: string; projectId: string; runId: string },
-  event: GeneratedRunEvent
+  event: GeneratedRunEvent,
+  planningGeneration?: number
 ) {
+  if (planningGeneration !== undefined && !(await isActivePlanningGeneration(supabase, context, planningGeneration))) {
+    return;
+  }
+
   await supabase.from("run_events").insert({
     owner_id: context.ownerId,
     project_id: context.projectId,
@@ -46,15 +52,20 @@ async function insertEvent(
     step: event.step,
     message: event.message,
     stream: event.stream ?? "system",
-    metadata: event.metadata ?? {}
+    metadata: planningGeneration === undefined ? event.metadata ?? {} : { ...(event.metadata ?? {}), planningGeneration }
   });
 }
 
 async function insertArtifact(
   supabase: Awaited<ReturnType<typeof createClient>>,
   context: { ownerId: string; projectId: string; runId: string },
-  artifact: HarnessArtifact
+  artifact: HarnessArtifact,
+  planningGeneration?: number
 ) {
+  if (planningGeneration !== undefined && !(await isActivePlanningGeneration(supabase, context, planningGeneration))) {
+    return;
+  }
+
   await supabase.from("artifacts").insert({
     owner_id: context.ownerId,
     project_id: context.projectId,
@@ -69,9 +80,14 @@ async function insertArtifact(
 async function insertTasks(
   supabase: Awaited<ReturnType<typeof createClient>>,
   context: { ownerId: string; projectId: string; runId: string },
-  tasks: GeneratedTask[]
+  tasks: GeneratedTask[],
+  planningGeneration?: number
 ) {
   if (!tasks.length) return;
+  if (planningGeneration !== undefined && !(await isActivePlanningGeneration(supabase, context, planningGeneration))) {
+    return;
+  }
+
   await supabase.from("tasks").insert(
     tasks.map((task) => ({
       owner_id: context.ownerId,
@@ -84,6 +100,22 @@ async function insertTasks(
       sort_order: task.sortOrder
     }))
   );
+}
+
+async function isActivePlanningGeneration(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  context: { ownerId: string; projectId: string; runId: string },
+  planningGeneration: number
+) {
+  const { data: run } = await supabase
+    .from("agent_runs")
+    .select("planning_generation,status")
+    .eq("id", context.runId)
+    .eq("project_id", context.projectId)
+    .eq("owner_id", context.ownerId)
+    .single();
+
+  return isCurrentPlanningGeneration((run as { planning_generation?: unknown } | null)?.planning_generation, planningGeneration) && run?.status === "planning";
 }
 
 export async function POST(_request: Request, { params }: { params: Promise<{ runId: string }> }) {
@@ -104,6 +136,23 @@ export async function POST(_request: Request, { params }: { params: Promise<{ ru
 
   if (run.status !== "planning" || run.current_step !== "planning_queued") {
     return NextResponse.json({ status: run.status, currentStep: run.current_step });
+  }
+
+  const planningGeneration = getNextPlanningGeneration((run as { planning_generation?: unknown }).planning_generation);
+  const { data: claimedRun } = await supabase
+    .from("agent_runs")
+    .update({ status: "planning", current_step: "planning_running", planning_generation: planningGeneration, updated_at: new Date().toISOString() })
+    .eq("id", run.id)
+    .eq("owner_id", user.id)
+    .eq("status", "planning")
+    .eq("current_step", "planning_queued")
+    .eq("planning_generation", (run as { planning_generation?: number }).planning_generation ?? 0)
+    .select("id")
+    .maybeSingle();
+
+  if (!claimedRun) {
+    const { data: latestRun } = await supabase.from("agent_runs").select("status,current_step").eq("id", runId).eq("owner_id", user.id).single();
+    return NextResponse.json({ status: latestRun?.status ?? "planning", currentStep: latestRun?.current_step ?? null });
   }
 
   const { data: project } = await supabase.from("projects").select("*").eq("id", run.project_id).eq("owner_id", user.id).single();
@@ -152,22 +201,19 @@ export async function POST(_request: Request, { params }: { params: Promise<{ ru
       .in("agent_name", ["ProductAgent", "ArchitectAgent", "PlannerAgent"])
   ]);
 
-  await supabase
-    .from("agent_runs")
-    .update({ status: "planning", current_step: "planning_running", updated_at: new Date().toISOString() })
-    .eq("id", run.id)
-    .eq("owner_id", user.id);
-
   try {
     const callbacks: AgentOrchestratorCallbacks = {
-      onEvent: (event) => insertEvent(supabase, context, event),
+      onEvent: (event) => insertEvent(supabase, context, event, planningGeneration),
       onProjectName: async (projectName) => {
+        if (!(await isActivePlanningGeneration(supabase, context, planningGeneration))) {
+          return;
+        }
         if (!continuationSource) {
           await supabase.from("projects").update({ name: projectName, updated_at: new Date().toISOString() }).eq("id", run.project_id).eq("owner_id", user.id);
         }
       },
-      onArtifact: (artifact) => insertArtifact(supabase, context, artifact),
-      onTasks: (tasks) => insertTasks(supabase, context, tasks)
+      onArtifact: (artifact) => insertArtifact(supabase, context, artifact, planningGeneration),
+      onTasks: (tasks) => insertTasks(supabase, context, tasks, planningGeneration)
     };
     const orchestrator = createAgentOrchestrator();
     const sourceArtifacts = !isPlanRevision && continuationSource
@@ -211,7 +257,8 @@ export async function POST(_request: Request, { params }: { params: Promise<{ ru
       .from("agent_runs")
       .update({ status: "pending_approval", current_step: "plan_ready", updated_at: new Date().toISOString() })
       .eq("id", run.id)
-      .eq("owner_id", user.id);
+      .eq("owner_id", user.id)
+      .eq("planning_generation", planningGeneration);
 
     return NextResponse.json({ status: "pending_approval", projectName: bundle.projectName });
   } catch (error) {
@@ -238,23 +285,24 @@ export async function POST(_request: Request, { params }: { params: Promise<{ ru
       continuationSource
         ? Promise.resolve()
         : supabase.from("projects").update({ name: bundle.projectName, updated_at: new Date().toISOString() }).eq("id", run.project_id).eq("owner_id", user.id),
-      insertTasks(supabase, context, bundle.tasks),
-      ...bundle.artifacts.map((artifact) => insertArtifact(supabase, context, artifact)),
-      ...bundle.events.map((event) => insertEvent(supabase, context, event)),
+      insertTasks(supabase, context, bundle.tasks, planningGeneration),
+      ...bundle.artifacts.map((artifact) => insertArtifact(supabase, context, artifact, planningGeneration)),
+      ...bundle.events.map((event) => insertEvent(supabase, context, event, planningGeneration)),
       insertEvent(supabase, context, {
         agentName: "PlannerAgent",
-        eventType: "agent.completed",
+        eventType: "agent.failed",
         step: "llm_fallback",
         message,
         stream: "stderr",
         metadata: { fallback: true }
-      })
+      }, planningGeneration)
     ]);
     await supabase
       .from("agent_runs")
       .update({ status: "pending_approval", current_step: "plan_ready", updated_at: new Date().toISOString() })
       .eq("id", run.id)
-      .eq("owner_id", user.id);
+      .eq("owner_id", user.id)
+      .eq("planning_generation", planningGeneration);
 
     return NextResponse.json({ status: "pending_approval", fallback: true });
   }

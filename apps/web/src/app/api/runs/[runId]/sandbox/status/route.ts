@@ -1,11 +1,28 @@
-import { NextResponse } from "next/server";
-import { buildSandboxRuntimeConfig, createSupabaseServiceClient, ensureSandboxPreviewServer, getVercelSandbox } from "@smota/sandbox-runner";
+import { after, NextResponse } from "next/server";
+import {
+  buildSandboxRuntimeConfig,
+  createSupabaseServiceClient,
+  ensureSandboxPreviewServer,
+  getVercelSandbox,
+  runVercelSandboxWorkflowJob,
+  shouldDispatchSandboxWorkflowJob
+} from "@smota/sandbox-runner";
 import { canReadRunSandboxStatus, shouldAttemptPreviewRecovery } from "@/lib/sandbox-status-access";
 import { createClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 const PREVIEW_RECOVERY_COOLDOWN_MS = 60_000;
+
+function dispatchSandboxWorkflowJob(runId: string) {
+  after(async () => {
+    try {
+      await runVercelSandboxWorkflowJob(runId);
+    } catch (error) {
+      console.error("Sandbox workflow job recovery failed", error);
+    }
+  });
+}
 
 export async function GET(request: Request, { params }: { params: Promise<{ runId: string }> }) {
   const { runId } = await params;
@@ -38,8 +55,18 @@ export async function GET(request: Request, { params }: { params: Promise<{ runI
   }
 
   let { data: sandboxRun } = await service.from("sandbox_runs").select("*").eq("run_id", runId).maybeSingle();
+  const { data: sandboxWorkflowJob } = await service
+    .from("sandbox_workflow_jobs")
+    .select("status, lease_expires_at")
+    .eq("run_id", runId)
+    .eq("owner_id", run.owner_id)
+    .maybeSingle();
   let previewRecovered = false;
   let previewRecoverySkipped = false;
+
+  if (run.status === "running" && run.sandbox_status !== "stopped" && shouldDispatchSandboxWorkflowJob(sandboxWorkflowJob, new Date())) {
+    dispatchSandboxWorkflowJob(runId);
+  }
 
   if (
     shouldAttemptPreviewRecovery({
@@ -102,5 +129,5 @@ export async function GET(request: Request, { params }: { params: Promise<{ runI
     service.from("sandbox_runs").select("*").eq("run_id", runId).maybeSingle()
   ]);
   sandboxRun = refreshedSandboxRun ?? sandboxRun;
-  return NextResponse.json({ run: refreshedRun ?? run, sandboxRun, previewRecovered, previewRecoverySkipped });
+  return NextResponse.json({ run: refreshedRun ?? run, sandboxRun, sandboxWorkflowJob, previewRecovered, previewRecoverySkipped });
 }

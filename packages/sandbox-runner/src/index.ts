@@ -7,3 +7,4 @@ export * from "./sandbox-preview-server";
 export * from "./sandbox-screenshot";
 export * from "./sandbox-security";
 export * from "./sandbox-workflow";
+export * from "./sandbox-workflow-job";

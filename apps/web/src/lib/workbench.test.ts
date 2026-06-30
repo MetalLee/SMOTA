@@ -504,6 +504,40 @@ describe("workbench helpers", () => {
     });
   });
 
+  it("ignores out-of-order planning completion events from stale planning requests", () => {
+    const progress = getAgentEventProgress([
+      { agent_name: "ProductAgent", event_type: "agent.started" },
+      { agent_name: "PlannerAgent", event_type: "agent.completed" },
+      { agent_name: "ProductAgent", event_type: "agent.completed" },
+      { agent_name: "ArchitectAgent", event_type: "agent.started" }
+    ]);
+
+    expect(
+      getAgentDisplayStates({
+        runStatus: "planning",
+        currentStep: "planning_running",
+        sandboxStatus: null,
+        buildStatus: null,
+        eventAgentNames: progress.completedAgentNames,
+        activeAgentNames: progress.activeAgentNames
+      })
+    ).toMatchObject({
+      ProductAgent: "done",
+      ArchitectAgent: "in_progress",
+      PlannerAgent: "todo"
+    });
+  });
+
+  it("does not treat planning fallback errors as completed agent progress", () => {
+    const progress = getAgentEventProgress([
+      { agent_name: "PlannerAgent", event_type: "agent.started" },
+      { agent_name: "PlannerAgent", event_type: "agent.failed" }
+    ]);
+
+    expect(progress.completedAgentNames).not.toContain("PlannerAgent");
+    expect(progress.activeAgentNames).toContain("PlannerAgent");
+  });
+
   it("describes realtime Sandbox visibility in Preview, Editor, and Files empty states", () => {
     expect(getRealtimeTabEmptyState("preview", "installing")).toEqual({
       title: "正在准备应用浏览器",

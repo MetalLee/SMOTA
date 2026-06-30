@@ -4,7 +4,7 @@
 
 ## 每次开发前必须阅读
 
-开始修改前，CodingAgent 必须阅读：
+开始修改本仓库前，协作者必须阅读：
 
 - `PROJECT_BRIEF.md`
 - `ARCHITECTURE.md`
@@ -39,11 +39,14 @@
 - 所有 Sandbox 操作必须通过服务端封装层完成。
 - 不要在页面组件中直接调用 Sandbox SDK。
 - Sandbox 任务必须可恢复。
+- `/sandbox/start` 必须是快速返回的异步启动入口，只负责 claim Run、写入 `sandbox_workflow_jobs` 并返回 `202 Accepted`；不得在该请求内同步等待 OpenCode、install、build、截图或 Reviewer 全流程完成。
+- Sandbox workflow 必须通过持久化 job lease 防重复执行；如果用户退出或请求中断，后续状态查询可以在 lease 过期后重新触发后台 worker。
 - 必须把 run 状态、sandbox name、当前 step 和 step results 持久化到 Supabase。
 - 必须把 stdout/stderr、Agent 状态和构建结果持久化到 `run_events`。
 - `tasks` 表是任务分解和任务进度唯一事实来源；`ROADMAP.md` 只作为可读计划说明，OpenCode 不得再维护另一套独立任务清单。
 - CodingAgent Prompt 只能包含分配给 CodingAgent 的可回写 task id，并要求 OpenCode 在任务开始、完成或失败时通过 HTTP API 更新这些任务的 `tasks.status`。
-- OpenCode 只能使用当前 Run 的短期任务回写 token 更新 `agent_name = CodingAgent` 的任务；这些任务状态更新不能修改 `agent_runs.status`、`current_step` 或 Agent 时间线状态。非 CodingAgent 任务继续按分配的 Agent 状态展示。
+- OpenCode 只能使用当前 Run 的短期任务回写 token 更新 `agent_name = CodingAgent` 的任务；这些任务状态更新不能修改 `agent_runs.status`、`current_step` 或 Agent 时间线状态。Prompt 必须明确禁止 CodingAgent 更新 BuildAgent、ReviewerAgent、ProductAgent、ArchitectAgent 或 PlannerAgent 任务。
+- BuildAgent 构建成功后，平台服务端必须兜底将当前 Run 下 `agent_name = BuildAgent` 的未完成任务更新为 `done` 并写入任务状态事件；非 CodingAgent 任务继续按分配的 Agent 状态展示。
 - 继续开发 Run 必须优先复用当前项目已有 Sandbox 文件；克隆项目即使没有语义上的 parent run，只要存在克隆写入的 workspace 文件索引，也必须按增量修改处理。
 - 复用已有 workspace 时不得重新执行 Vite 初始化，不得覆盖 `/workspace` 中已有应用骨架。
 - Sandbox 恢复后若预览端口未监听，服务端必须通过封装层探测并重启 Vite dev server；预览恢复检查必须有并发保护，且每个 preview URL 最多自动触发一次，避免常规轮询持续创建 Sandbox 命令；健康判断必须以 `127.0.0.1:5173` HTTP 可访问为准，不能用 `pgrep` 之类的进程匹配代替；客户端不能直接调用 Sandbox SDK。
@@ -80,11 +83,15 @@
 - 在中文环境下，ProductAgent、ArchitectAgent、PlannerAgent、CodingAgent 和 ReviewerAgent 的用户可见输出必须使用简体中文；技术标识、文件名、命令、代码、API 名称和专有模型名可以保留英文。
 - 模型 `reasoning_content` 不写入 `run_events`，也不在 Web 工作台展示；不要把系统提示词或密钥暴露到前端或 Sandbox。
 - ProductAgent、ArchitectAgent 和 PlannerAgent 生成的 Harness artifact 入库前必须清理外层 Markdown fence（例如 ` ```markdown ` / ` ``` `），但不能破坏文档内部合法代码块。
+- ProductAgent、ArchitectAgent 和 PlannerAgent 只有在 LLM 输出已成功解析并生成对应结构化结果后，才允许写入 `agent.completed`；JSON 解析失败进入 fallback 时必须写入 `agent.failed` 或专用错误事件，不能把 fallback 错误伪装成 completed。
+- 规划流程必须使用 `agent_runs.planning_generation` 隔离重复请求和过期请求；写入 ProductAgent、ArchitectAgent、PlannerAgent 的事件、artifacts、tasks 或最终状态前必须确认 generation 仍匹配当前 Run。
+- CodingAgent Prompt 只应包含 `PROJECT_BRIEF.md`、`ARCHITECTURE.md` 和 `CODEX_TASK_RULES.md` 作为 Harness 上下文；`ROADMAP.md` 和 `AGENTS.md` 仍写入 `/workspace` 供人工查看，但不要传入 CodingAgent Prompt，避免重复计划和职责说明干扰代码执行。
 - 继续开发 Prompt 必须明确这是已有项目增量修改，包含本次修改提示、已有文件摘要和可用的上一轮 Harness；CodingAgent 不得假设空项目。
 - Sandbox 编排逻辑必须与 UI components 分离。
 - Agent 编排逻辑必须与渲染逻辑分离。
 - 重要状态转换前后都要持久化。
 - 必须明确处理已停止或已过期 Sandbox。
+- 生成应用的 Vite 项目根目录固定为 `/workspace`；ArchitectAgent、PlannerAgent 和 CodingAgent 不得规划或创建 `gomoku/`、`todo-app/`、`app/` 等新的项目根目录，也不得把 `index.html`、`package.json`、`src/`、`public/`、`vite.config.ts` 移入新子目录。
 
 ## 文档规则
 

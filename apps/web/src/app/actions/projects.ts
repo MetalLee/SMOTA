@@ -12,7 +12,7 @@ import {
 import { buildClonedArtifactRows, buildCloneProjectName } from "@/lib/project-clone";
 import { isProjectShareable } from "@/lib/project-sharing";
 import { selectContinuationWorkspaceSource } from "@/lib/continuation-run";
-import { buildPlaceholderProjectName, canRevisePendingPlan, canStartContinuationRun } from "@/lib/project-planning";
+import { buildPlaceholderProjectName, canRevisePendingPlan, canStartContinuationRun, getNextPlanningGeneration } from "@/lib/project-planning";
 import { createClient } from "@/lib/supabase/server";
 
 async function requireUser() {
@@ -61,6 +61,7 @@ export async function createProjectAction(formData: FormData) {
       user_prompt: input.prompt,
       status: "planning",
       current_step: "planning_queued",
+      planning_generation: 0,
       runner_provider: "vercel_sandbox",
       sandbox_runtime: process.env.SANDBOX_RUNTIME ?? "node24",
       sandbox_timeout_ms: Number(process.env.SANDBOX_TIMEOUT_MS ?? 2700000),
@@ -310,7 +311,7 @@ export async function revisePlanAction(formData: FormData) {
 
   const { data: run } = await supabase
     .from("agent_runs")
-    .select("status,current_step")
+    .select("status,current_step,planning_generation")
     .eq("id", runId)
     .eq("project_id", projectId)
     .eq("owner_id", user.id)
@@ -321,12 +322,14 @@ export async function revisePlanAction(formData: FormData) {
   }
 
   const now = new Date().toISOString();
+  const nextPlanningGeneration = getNextPlanningGeneration((run as { planning_generation?: unknown }).planning_generation);
   const { error: updateError } = await supabase
     .from("agent_runs")
     .update({
       user_prompt: prompt,
       status: "planning",
       current_step: "planning_queued",
+      planning_generation: nextPlanningGeneration,
       updated_at: now
     })
     .eq("id", runId)
@@ -346,7 +349,7 @@ export async function revisePlanAction(formData: FormData) {
     step: "planning_queued",
     message: "用户提交了计划修改意见，ProductAgent、ArchitectAgent 和 PlannerAgent 将基于已有 Harness 重新生成计划。",
     stream: "system",
-    metadata: { prompt }
+    metadata: { prompt, planningGeneration: nextPlanningGeneration }
   });
 
   if (eventError) {
@@ -490,6 +493,7 @@ export async function cloneSharedProjectAction(formData: FormData) {
       user_prompt: sourceProject.prompt,
       status: "running",
       current_step: "clone_queued",
+      planning_generation: 0,
       runner_provider: "vercel_sandbox",
       sandbox_status: "pending",
       sandbox_runtime: runtimeConfig.runtime,

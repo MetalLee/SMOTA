@@ -34,6 +34,19 @@ export async function POST(_request: Request, { params }: { params: Promise<{ ru
   await Promise.all([
     service.from("agent_runs").update({ sandbox_status: "stopped", updated_at: new Date().toISOString() }).eq("id", runId).eq("owner_id", user.id),
     service.from("sandbox_runs").update({ status: "stopped", updated_at: new Date().toISOString() }).eq("run_id", runId).eq("owner_id", user.id),
+    service
+      .from("sandbox_workflow_jobs")
+      .update({
+        status: "failed",
+        current_phase: "stopped",
+        lease_owner: null,
+        lease_expires_at: null,
+        last_error: "Sandbox stopped by user.",
+        completed_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      })
+      .eq("run_id", runId)
+      .eq("owner_id", user.id),
     service.from("run_events").insert({
       owner_id: user.id,
       project_id: run.project_id,

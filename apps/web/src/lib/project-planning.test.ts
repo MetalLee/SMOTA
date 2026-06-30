@@ -3,6 +3,8 @@ import {
   buildPlaceholderProjectName,
   canRevisePendingPlan,
   canStartContinuationRun,
+  getNextPlanningGeneration,
+  isCurrentPlanningGeneration,
   shouldAutoStartPlanning,
   shouldAutoStartSandbox,
   shouldDisablePlanApproval
@@ -48,5 +50,19 @@ describe("project planning helpers", () => {
     expect(shouldDisablePlanApproval("请改成深色模式")).toBe(true);
     expect(shouldDisablePlanApproval("", true)).toBe(true);
     expect(shouldDisablePlanApproval("", false, true)).toBe(true);
+  });
+
+  it("increments planning generation to invalidate stale planning writers", () => {
+    expect(getNextPlanningGeneration(null)).toBe(1);
+    expect(getNextPlanningGeneration(undefined)).toBe(1);
+    expect(getNextPlanningGeneration(0)).toBe(1);
+    expect(getNextPlanningGeneration(4)).toBe(5);
+    expect(getNextPlanningGeneration("bad")).toBe(1);
+  });
+
+  it("accepts planning writes only for the active planning generation", () => {
+    expect(isCurrentPlanningGeneration(3, 3)).toBe(true);
+    expect(isCurrentPlanningGeneration(2, 3)).toBe(false);
+    expect(isCurrentPlanningGeneration(null, 1)).toBe(false);
   });
 });

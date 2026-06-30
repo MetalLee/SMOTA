@@ -40,7 +40,7 @@ export interface GeneratedTask {
 
 export interface GeneratedRunEvent {
   agentName: AgentName;
-  eventType: "agent.started" | "agent.reasoning" | "agent.completed" | "run.created" | "plan.approved";
+  eventType: "agent.started" | "agent.reasoning" | "agent.completed" | "agent.failed" | "run.created" | "plan.approved";
   step: string;
   message: string;
   stream?: "stdout" | "stderr" | "system";
@@ -79,6 +79,7 @@ export interface AgentRunRow {
   user_prompt: string;
   status: string;
   current_step: string | null;
+  planning_generation?: number;
   runner_provider: string;
   sandbox_name: string | null;
   sandbox_status: string | null;

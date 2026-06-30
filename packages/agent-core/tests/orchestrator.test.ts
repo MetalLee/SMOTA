@@ -119,6 +119,77 @@ describe("agent orchestrator", () => {
     expect(prompts.every((prompt) => prompt.includes("简体中文"))).toBe(true);
   });
 
+  it("instructs planning agents to keep the generated app at the /workspace Vite root", async () => {
+    const prompts: string[] = [];
+    const provider = createScriptedProvider([
+      JSON.stringify({
+        projectName: "简易五子棋",
+        projectBrief: "# 项目简介\n五子棋",
+        tasks: []
+      }),
+      JSON.stringify({
+        architecture: "# 架构\nVite React TypeScript",
+        codexRules: "# CODEX 任务规则\n根目录开发"
+      }),
+      JSON.stringify({
+        roadmap: "# 路线图\n实现棋盘",
+        agents: "# AGENTS\nCodingAgent",
+        tasks: []
+      })
+    ]);
+    const originalGenerateText = provider.generateText;
+    provider.generateText = async (input) => {
+      prompts.push(input.prompt);
+      return originalGenerateText(input);
+    };
+
+    await createAgentOrchestrator({ llm: provider }).generateHarnessBundle({
+      prompt: "做一个简易五子棋游戏",
+      mode: "plan-first",
+      appType: "Web App"
+    });
+
+    const allPrompts = prompts.join("\n");
+    expect(allPrompts).toContain("/workspace");
+    expect(allPrompts).toContain("Vite React TypeScript");
+    expect(allPrompts).toContain("不要规划或创建 gomoku/");
+    expect(allPrompts).toContain("不要把 index.html、package.json、src/");
+  });
+
+  it("does not mark an agent completed when its JSON response cannot be parsed", async () => {
+    const provider = createScriptedProvider([
+      JSON.stringify({
+        projectName: "五子棋",
+        projectBrief: "# 项目简介\n五子棋",
+        tasks: []
+      }),
+      JSON.stringify({
+        architecture: "# 架构\nVite",
+        codexRules: "# CODEX 任务规则\n根目录"
+      }),
+      '{"roadmap":"# 路线图\n非法 JSON 控制字符","agents":"# AGENTS","tasks":[]}'
+    ]);
+    const events: string[] = [];
+
+    await expect(
+      createAgentOrchestrator({ llm: provider }).generateHarnessBundle(
+        {
+          prompt: "做一个五子棋",
+          mode: "plan-first",
+          appType: "Web App"
+        },
+        {
+          onEvent: (event) => {
+            events.push(`${event.agentName}:${event.eventType}:${event.step}`);
+          }
+        }
+      )
+    ).rejects.toThrow(/control character|JSON/i);
+
+    expect(events).toContain("PlannerAgent:agent.started:roadmap");
+    expect(events).not.toContain("PlannerAgent:agent.completed:roadmap");
+  });
+
   it("emits artifacts and project name as each planning agent completes", async () => {
     const provider = createScriptedProvider([
       JSON.stringify({

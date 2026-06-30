@@ -126,6 +126,7 @@
 
 - 创建服务端 Sandbox 封装层。
 - 基于已批准的 AgentRun 创建 Vercel Sandbox。
+- 将 `/sandbox/start` 改为异步入队入口，通过 `sandbox_workflow_jobs` 和 lease 驱动后台 workflow。
 - 持久化 sandbox name、status、runtime、timeout 和 preview metadata。
 - 将 Harness 文件写入 `/workspace`。
 - 初始化 Vite React TypeScript 应用。
@@ -138,6 +139,8 @@
 ### 验收标准
 
 - 已批准的 run 会创建 Vercel Sandbox。
+- `/sandbox/start` 快速返回 `202 Accepted`，长时间 OpenCode、安装、构建和 Review 不阻塞启动请求。
+- Sandbox workflow job 有持久化 lease，重复请求不会并发启动同一 Run，lease 过期后可恢复触发。
 - Sandbox 操作不会在 client components 中执行。
 - 长时间生成任务不依赖普通 Vercel Function 本地磁盘。
 - 构建状态和错误被持久化。
@@ -238,4 +241,3 @@
 - 不做组织空间。
 - 不做多人协作。
 - 不做自建 Sandbox 基础设施。
-

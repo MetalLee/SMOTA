@@ -147,6 +147,7 @@ const STATUS_LABELS: Record<string, string> = {
   failed: "失败",
   failed_retryable: "可重试",
   not_ready: "未就绪",
+  queued: "排队中",
   creating: "创建中",
   ready: "就绪",
   generating: "生成中",
@@ -422,6 +423,7 @@ export function getTaskDisplayStatus(taskStatus: string, runStatus: string, sand
 }
 
 const AGENT_DISPLAY_NAMES: AgentDisplayName[] = ["ProductAgent", "ArchitectAgent", "PlannerAgent", "CodingAgent", "BuildAgent", "ReviewerAgent"];
+const PLANNING_AGENT_ORDER: AgentDisplayName[] = ["ProductAgent", "ArchitectAgent", "PlannerAgent"];
 
 function isAgentDisplayName(value: string | null | undefined): value is AgentDisplayName {
   return Boolean(value && AGENT_DISPLAY_NAMES.includes(value as AgentDisplayName));
@@ -525,6 +527,11 @@ export function getAgentEventProgress(events: AgentProgressEventInput[]): AgentE
     }
 
     if (event.event_type === "agent.completed") {
+      const planningAgentIndex = PLANNING_AGENT_ORDER.indexOf(event.agent_name as AgentDisplayName);
+      if (planningAgentIndex > 0 && !completed.has(PLANNING_AGENT_ORDER[planningAgentIndex - 1])) {
+        continue;
+      }
+
       completed.add(event.agent_name);
       active.delete(event.agent_name);
       continue;

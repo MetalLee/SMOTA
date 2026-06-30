@@ -26,6 +26,7 @@ import {
 } from "./sandbox-security";
 
 const HARNESS_PATHS = ["PROJECT_BRIEF.md", "ARCHITECTURE.md", "ROADMAP.md", "CODEX_TASK_RULES.md", "AGENTS.md"];
+const CODING_AGENT_CONTEXT_PATHS = new Set(["PROJECT_BRIEF.md", "ARCHITECTURE.md", "CODEX_TASK_RULES.md"]);
 
 interface WorkflowOptions {
   supabase?: SupabaseClient;
@@ -59,6 +60,8 @@ function taskStatusProtocol(input: { taskUpdateUrl: string; taskUpdateTokenEnvNa
     "Task tracking protocol:",
     "Approved tasks are the only task list. Do not create a separate task breakdown or track progress only in prose.",
     "Work only on tasks assigned to CodingAgent. Before starting a task, mark it in_progress. After completing it, mark it done. If it cannot be completed, mark it failed and explain why in your final response.",
+    "Every CodingAgent task that you finish must be marked done through the HTTP API before your final response.",
+    "Do not update BuildAgent, ReviewerAgent, ProductAgent, ArchitectAgent, or PlannerAgent tasks. The platform updates those agent-owned tasks.",
     "Use this exact HTTP pattern to update a task:",
     "```bash",
     `curl -fsS -X POST "${input.taskUpdateUrl}/tasks/<taskId>/status" \\`,
@@ -70,6 +73,10 @@ function taskStatusProtocol(input: { taskUpdateUrl: string; taskUpdateTokenEnvNa
   ].join("\n");
 }
 
+function codingAgentContextArtifacts(artifacts: Array<{ path: string; content: string }>) {
+  return artifacts.filter((artifact) => CODING_AGENT_CONTEXT_PATHS.has(artifact.path));
+}
+
 export function buildCodingAgentPrompt(input: {
   projectPrompt: string;
   tasks: CodingTask[];
@@ -78,12 +85,15 @@ export function buildCodingAgentPrompt(input: {
   taskUpdateTokenEnvName: string;
 }) {
   const taskLines = formatCodingTaskLines(input.tasks);
-  const artifactSections = input.artifacts.map((artifact) => `## ${artifact.path}\n\n${artifact.content}`);
+  const artifactSections = codingAgentContextArtifacts(input.artifacts).map((artifact) => `## ${artifact.path}\n\n${artifact.content}`);
 
   return [
     "You are the CodingAgent for SMOTA.",
     SIMPLIFIED_CHINESE_OUTPUT_INSTRUCTION,
     "All generated application code must stay inside /workspace.",
+    "Treat /workspace as the Vite project root. Edit the existing root package.json, index.html, src/, public/, and Vite files directly.",
+    "Do not create a nested app root such as /workspace/gomoku, /workspace/todo-app, /workspace/app, or any project-named subdirectory.",
+    "If any Harness artifact proposes a nested project directory, ignore that directory layout and map the implementation back to the existing /workspace root.",
     "Implement the approved MVP as a Vite React TypeScript application.",
     "Do not use a Local Runner and do not depend on generated-workspaces.",
     "",
@@ -182,7 +192,7 @@ export function buildContinuationCodingAgentPrompt(input: {
 }) {
   const sourceLabel = input.sourceKind === "cloned_workspace" ? "克隆来的已有应用" : "上一轮已生成应用";
   const taskLines = formatCodingTaskLines(input.tasks);
-  const artifactSections = input.artifacts.map((artifact) => `## ${artifact.path}\n\n${artifact.content}`);
+  const artifactSections = codingAgentContextArtifacts(input.artifacts).map((artifact) => `## ${artifact.path}\n\n${artifact.content}`);
   const fileLines = input.workspaceFiles.length ? input.workspaceFiles.map((path) => `- ${path}`).join("\n") : "- 暂无文件索引，请先查看 /workspace";
 
   return [
@@ -192,6 +202,9 @@ export function buildContinuationCodingAgentPrompt(input: {
     `当前项目来源：${sourceLabel}。`,
     "不要重新初始化、重建或覆盖整个项目；不要删除与本次需求无关的文件。",
     "All generated application code must stay inside /workspace.",
+    "Treat /workspace as the Vite project root. Edit the existing root package.json, index.html, src/, public/, and Vite files directly.",
+    "Do not create a nested app root such as /workspace/gomoku, /workspace/todo-app, /workspace/app, or any project-named subdirectory.",
+    "If any Harness artifact proposes a nested project directory, ignore that directory layout and map the implementation back to the existing /workspace root.",
     "",
     `Original project request: ${input.originalProjectPrompt}`,
     `Current change request: ${input.changePrompt}`,
@@ -232,6 +245,29 @@ async function upsertSandboxRun(
   await supabase.from("sandbox_runs").insert(row);
 }
 
+export async function markAgentTasksDone(supabase: SupabaseClient, context: RunContext, agentName: string) {
+  const { error } = await supabase
+    .from("tasks")
+    .update({ status: "done", updated_at: new Date().toISOString() })
+    .eq("run_id", context.runId)
+    .eq("owner_id", context.ownerId)
+    .eq("project_id", context.projectId)
+    .eq("agent_name", agentName)
+    .neq("status", "done");
+
+  if (error) {
+    throw new Error(`Failed to mark ${agentName} tasks done: ${error.message}`);
+  }
+
+  await insertRunEvent(supabase, context, {
+    eventType: "task.status.updated",
+    step: "task_status",
+    agentName,
+    message: `${agentName} tasks marked done after agent completion.`,
+    payload: { agentName, status: "done" }
+  });
+}
+
 export async function runVercelSandboxWorkflow(runId: string, options: WorkflowOptions = {}) {
   const supabase = options.supabase ?? createSupabaseServiceClient(options.env);
   const env = options.env ?? process.env;
@@ -241,8 +277,8 @@ export async function runVercelSandboxWorkflow(runId: string, options: WorkflowO
     throw new Error(runError?.message ?? "Run not found.");
   }
 
-  if (!["approved", "failed_retryable"].includes(String(run.status))) {
-    throw new Error(`Run status must be approved or failed_retryable, got ${run.status}.`);
+  if (!["approved", "failed_retryable", "running"].includes(String(run.status))) {
+    throw new Error(`Run status must be approved, failed_retryable, or running, got ${run.status}.`);
   }
 
   const { data: project } = await supabase
@@ -541,6 +577,7 @@ export async function runVercelSandboxWorkflow(runId: string, options: WorkflowO
     }
 
     await insertRunEvent(supabase, context, { eventType: "build.succeeded", step: "build", message: "pnpm build succeeded." });
+    await markAgentTasksDone(supabase, context, "BuildAgent");
     await updateRunStatus(supabase, context, { build_status: "succeeded", current_step: "indexing_files" });
     await scanWorkspaceFiles({ sandbox, supabase, context, phase: "build" });
 

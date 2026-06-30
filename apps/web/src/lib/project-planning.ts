@@ -23,3 +23,11 @@ export function canRevisePendingPlan(runStatus: string, currentStep: string | nu
 export function shouldDisablePlanApproval(revisionPrompt: string, revisionSubmitting = false, approvalSubmitting = false): boolean {
   return revisionSubmitting || approvalSubmitting || revisionPrompt.trim().length > 0;
 }
+
+export function getNextPlanningGeneration(currentGeneration: unknown): number {
+  return typeof currentGeneration === "number" && Number.isFinite(currentGeneration) && currentGeneration >= 0 ? currentGeneration + 1 : 1;
+}
+
+export function isCurrentPlanningGeneration(currentGeneration: unknown, expectedGeneration: number): boolean {
+  return typeof currentGeneration === "number" && currentGeneration === expectedGeneration;
+}
