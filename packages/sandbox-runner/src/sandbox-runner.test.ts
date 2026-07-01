@@ -516,6 +516,7 @@ describe("sandbox runner helpers", () => {
     expect(buildRealtimeSandboxPhasePlan()).toEqual({
       fileScanPhases: ["harness_written", "init_vite", "preview_ready", "opencode_run", "install_after_opencode", "build"],
       previewStartsBeforeOpenCode: true,
+      finalPreviewEnsurePhase: "before_review_report",
       screenshotPhase: "after_build",
       reviewSteps: ["review_screenshot", "review_report"],
       runSuccessPhase: "after_review_report"

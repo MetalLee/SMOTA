@@ -324,6 +324,7 @@ export function buildRealtimeSandboxPhasePlan() {
   return {
     fileScanPhases: ["harness_written", "init_vite", "preview_ready", "opencode_run", "install_after_opencode", "build"],
     previewStartsBeforeOpenCode: true,
+    finalPreviewEnsurePhase: "before_review_report",
     screenshotPhase: "after_build",
     reviewSteps: ["review_screenshot", "review_report"],
     runSuccessPhase: "after_review_report"
@@ -760,6 +761,14 @@ export async function runVercelSandboxWorkflowPhase(
     }
 
     const previewUrl = run.sandbox_preview_url ?? getSandboxPreviewUrl(sandbox, config.publishPort);
+    await updateRunStatus(supabase, context, { current_step: "review_preview", sandbox_preview_url: previewUrl, sandbox_status: "previewing" });
+    await insertWorkflowPhaseStep(supabase, context, {
+      phase: options.phase,
+      phaseStep: "final_preview_ensure",
+      message: "Ensuring preview server is ready before completing run.",
+      payload: { previewUrl, port: config.publishPort }
+    });
+    await ensureSandboxPreviewServer({ supabase, context, sandbox, port: config.publishPort, timeoutMs: config.timeoutMs });
     await supabase.from("sandbox_runs").update({ status: "previewing", preview_url: previewUrl }).eq("run_id", run.id);
     const screenshotBucket = getPreviewScreenshotBucket(env);
     let previewImageUrl: string | null = null;
@@ -1205,6 +1214,14 @@ export async function runVercelSandboxWorkflow(runId: string, options: WorkflowO
     await updateRunStatus(supabase, context, { build_status: "succeeded", current_step: "indexing_files" });
     await scanWorkspaceFiles({ sandbox, supabase, context, phase: "build" });
 
+    await updateRunStatus(supabase, context, { current_step: "review_preview", sandbox_preview_url: previewUrl, sandbox_status: "previewing" });
+    await insertRunEvent(supabase, context, {
+      eventType: "step.status",
+      step: "review_preview",
+      message: "Ensuring preview server is ready before completing run.",
+      payload: { previewUrl, port: config.publishPort }
+    });
+    await ensureSandboxPreviewServer({ supabase, context, sandbox, port: config.publishPort, timeoutMs: config.timeoutMs });
     await supabase.from("sandbox_runs").update({ status: "previewing", preview_url: previewUrl }).eq("run_id", run.id);
     const screenshotBucket = getPreviewScreenshotBucket(env);
     let previewImageUrl: string | null = null;

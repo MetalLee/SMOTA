@@ -49,6 +49,7 @@ const RUNNING_SANDBOX_WORKFLOW_STEPS = new Set([
   "fixing",
   "build_retry",
   "indexing_files",
+  "review_preview",
   "review_screenshot",
   "review_report"
 ]);

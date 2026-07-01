@@ -112,7 +112,7 @@ OpenCode CLI + pnpm install + pnpm build + Vite dev server
 15. BuildAgent 构建成功后，Runner 将当前 Run 下分配给 BuildAgent 的任务兜底更新为 `done`。
 16. stdout / stderr、构建状态、错误和 step 事件持续写入 `run_events`；Sandbox workflow phase 会额外写入边界事件，用于定位卡在 Sandbox 解析、CodingAgent 输入加载、OpenCode 配置或 OpenCode 执行等阶段。
 17. Runner 扫描 `/workspace` 文件树并写入 `workspace_files`。
-18. Vite dev server 以 `5173` 端口启动，preview URL 写入 `agent_runs` 和 `sandbox_runs`。
+18. Vite dev server 以 `5173` 端口启动，preview URL 写入 `agent_runs` 和 `sandbox_runs`；构建完成并进入 Review 前会再次确认该端口可访问，避免成功态预览指向未监听端口。
 19. ReviewerAgent 基于构建结果、事件、文件索引和已知问题生成中文 `REVIEW_REPORT.md`。
 
 继续开发数据流：
@@ -147,7 +147,7 @@ OpenCode CLI + pnpm install + pnpm build + Vite dev server
 - Files Tab 以树状表格展示 Sandbox 文件索引。
 - Editor Tab 使用 Monaco Editor 通过服务端 API 只读查看文件内容。
 - Preview Tab 通过 iframe 展示 Sandbox dev server。
-- Sandbox 预览端口恢复检查：当持久化 Sandbox 恢复但 `5173` 未监听时，服务端可重启 Vite dev server。
+- Sandbox 预览端口恢复检查：当持久化 Sandbox 恢复或构建后 `5173` 未监听时，服务端可重启 Vite dev server。
 - ReviewerAgent 生成中文质量检视报告。
 - Supabase RLS 数据隔离，业务表包含 `owner_id`。
 - Service role key 仅在服务端使用，不暴露到前端，也不注入 Sandbox。
