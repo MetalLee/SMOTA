@@ -184,6 +184,10 @@ export function shouldEnsurePreviewServer(params: {
   return now - lastAttemptAt >= cooldownMs;
 }
 
+export function shouldCheckSandboxWorkflowStatus(params: { runStatus: string; sandboxStatus?: string | null }): boolean {
+  return params.runStatus === "running" && params.sandboxStatus !== "stopped";
+}
+
 export function getWorkspaceRefreshDelayMs(documentHidden: boolean): number {
   return documentHidden ? 15_000 : 3_000;
 }

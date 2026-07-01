@@ -17,6 +17,7 @@ import {
   getAgentEventProgress,
   getTaskDisplayItems,
   shouldEnsurePreviewServer,
+  shouldCheckSandboxWorkflowStatus,
   shouldReloadPreviewAfterRecovery,
   selectVisibleWorkspaceFiles,
   shouldReloadRunEvents,
@@ -319,6 +320,14 @@ describe("workbench helpers", () => {
         cooldownMs: 60_000
       })
     ).toBe(true);
+  });
+
+  it("keeps polling Sandbox status while a workflow run is active", () => {
+    expect(shouldCheckSandboxWorkflowStatus({ runStatus: "running", sandboxStatus: "previewing" })).toBe(true);
+    expect(shouldCheckSandboxWorkflowStatus({ runStatus: "running", sandboxStatus: "generating" })).toBe(true);
+    expect(shouldCheckSandboxWorkflowStatus({ runStatus: "running", sandboxStatus: "stopped" })).toBe(false);
+    expect(shouldCheckSandboxWorkflowStatus({ runStatus: "succeeded", sandboxStatus: "previewing" })).toBe(false);
+    expect(shouldCheckSandboxWorkflowStatus({ runStatus: "failed", sandboxStatus: "failed" })).toBe(false);
   });
 
   it("reloads recovered previews only when the current iframe has not loaded", () => {

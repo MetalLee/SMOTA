@@ -142,6 +142,7 @@ OpenCode CLI + pnpm install + pnpm build + Vite dev server
 - BuildAgent 执行 `pnpm install`、`pnpm build`，构建失败时只自动修复一次；构建成功后，平台服务端将当前 Run 下分配给 BuildAgent 的任务兜底更新为 `done`。
 - Terminal Tab 展示 Agent、Sandbox、OpenCode、安装、构建和修复日志。
 - 工作台轮询有 in-flight guard；隐藏标签页会降低刷新频率，避免慢请求堆积。
+- 工作台在 Sandbox workflow 运行中会轻量请求 `/sandbox/status`，用于触发 queued 或 lease 过期的 workflow job 继续执行；只有预览需要恢复时才附带 preview recovery 检查。
 - 左侧计划任务按 ProductAgent、ArchitectAgent、PlannerAgent、CodingAgent、BuildAgent、ReviewerAgent 顺序分组展示，同一 Agent 下保持 PlannerAgent 生成的原始顺序。
 - Files Tab 以树状表格展示 Sandbox 文件索引。
 - Editor Tab 使用 Monaco Editor 通过服务端 API 只读查看文件内容。

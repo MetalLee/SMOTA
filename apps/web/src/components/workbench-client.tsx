@@ -58,6 +58,7 @@ import {
   getWorkbenchHeaderActions,
   getWorkbenchLayoutClasses,
   getWorkspaceRefreshDelayMs,
+  shouldCheckSandboxWorkflowStatus,
   shouldEnsurePreviewServer,
   shouldStartWorkspaceRefresh,
   shouldReloadPreviewAfterRecovery,
@@ -190,13 +191,28 @@ export function WorkbenchClient({
       });
       const forceEnsurePreview = recoveryState.forceNext;
       recoveryState.forceNext = false;
-      const statusRequest = shouldEnsurePreview
+      const shouldCheckWorkflowStatus = shouldCheckSandboxWorkflowStatus({
+        runStatus: run.status,
+        sandboxStatus: run.sandbox_status ?? sandboxRun?.status
+      });
+      const statusRequest = shouldEnsurePreview || shouldCheckWorkflowStatus
         ? (() => {
-            recoveryState.inFlight = true;
-            recoveryState.lastAttemptAt = Date.now();
-            const suffix = forceEnsurePreview ? "&force=1" : "";
-            return fetch(`/api/runs/${run.id}/sandbox/status?ensurePreview=1${suffix}`, { cache: "no-store" }).finally(() => {
-              recoveryState.inFlight = false;
+            if (shouldEnsurePreview) {
+              recoveryState.inFlight = true;
+              recoveryState.lastAttemptAt = Date.now();
+            }
+            const params = new URLSearchParams();
+            if (shouldEnsurePreview) {
+              params.set("ensurePreview", "1");
+              if (forceEnsurePreview) {
+                params.set("force", "1");
+              }
+            }
+            const query = params.toString();
+            return fetch(`/api/runs/${run.id}/sandbox/status${query ? `?${query}` : ""}`, { cache: "no-store" }).finally(() => {
+              if (shouldEnsurePreview) {
+                recoveryState.inFlight = false;
+              }
             });
           })()
         : Promise.resolve(null);
