@@ -25,10 +25,24 @@ import {
   getRunControls,
   getTaskDisplayStatus,
   getWorkbenchLayoutClasses,
+  getWorkspaceRefreshDelayMs,
+  shouldStartWorkspaceRefresh,
   shouldShowWorkspaceNavigationOverlay
 } from "./workbench";
 
 describe("workbench helpers", () => {
+  it("blocks overlapping workspace polling refreshes", () => {
+    expect(shouldStartWorkspaceRefresh({ inFlight: false, documentHidden: false })).toBe(true);
+    expect(shouldStartWorkspaceRefresh({ inFlight: true, documentHidden: false })).toBe(false);
+  });
+
+  it("backs off workspace polling while the page is hidden", () => {
+    expect(getWorkspaceRefreshDelayMs(false)).toBe(3000);
+    expect(getWorkspaceRefreshDelayMs(true)).toBe(15000);
+    expect(shouldStartWorkspaceRefresh({ inFlight: false, documentHidden: true, lastStartedAt: 10_000, now: 20_000 })).toBe(false);
+    expect(shouldStartWorkspaceRefresh({ inFlight: false, documentHidden: true, lastStartedAt: 10_000, now: 30_000 })).toBe(true);
+  });
+
   it("maps run status to the available primary action", () => {
     expect(getRunControls("draft", null).primaryAction).toBe("approve");
     expect(getRunControls("pending_approval", null).primaryAction).toBe("approve");

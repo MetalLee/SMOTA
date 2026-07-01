@@ -57,7 +57,9 @@ import {
   getTaskDisplayItems,
   getWorkbenchHeaderActions,
   getWorkbenchLayoutClasses,
+  getWorkspaceRefreshDelayMs,
   shouldEnsurePreviewServer,
+  shouldStartWorkspaceRefresh,
   shouldReloadPreviewAfterRecovery,
   shouldShowWorkspaceNavigationOverlay,
   stripOuterMarkdownFence,
@@ -138,6 +140,7 @@ export function WorkbenchClient({
     inFlight: boolean;
     forceNext: boolean;
   }>({ previewUrl: null, lastAttemptAt: null, inFlight: false, forceNext: false });
+  const workspaceRefreshRef = useRef<{ inFlight: boolean; lastStartedAt: number | null }>({ inFlight: false, lastStartedAt: null });
 
   const queryTab = searchParams.get("tab") ?? initialActiveTab;
   const activeTab = tabs.some((tab) => tab.key === queryTab) ? queryTab : "plan";
@@ -150,101 +153,119 @@ export function WorkbenchClient({
   const shareable = isProjectShareable({ runStatus: run.status, sandboxStatus: run.sandbox_status ?? sandboxRun?.status, previewUrl: currentPreviewUrl });
 
   const refreshWorkspace = useCallback(async () => {
+    const documentHidden = typeof document !== "undefined" ? document.hidden : false;
+    const now = Date.now();
+    if (
+      !shouldStartWorkspaceRefresh({
+        inFlight: workspaceRefreshRef.current.inFlight,
+        documentHidden,
+        lastStartedAt: workspaceRefreshRef.current.lastStartedAt,
+        now
+      })
+    ) {
+      return;
+    }
+    workspaceRefreshRef.current.inFlight = true;
+    workspaceRefreshRef.current.lastStartedAt = now;
     const requestedRunId = run.id;
-    const latestEventCursor = getLatestRunEventCursor(eventsRef.current);
-    const eventsUrl = latestEventCursor
-      ? `/api/runs/${requestedRunId}/events?after=${encodeURIComponent(latestEventCursor)}`
-      : `/api/runs/${requestedRunId}/events`;
-    const previewUrl = run.sandbox_preview_url ?? sandboxRun?.preview_url ?? null;
-    const recoveryState = previewRecoveryRef.current;
-    if (recoveryState.previewUrl !== previewUrl) {
-      recoveryState.previewUrl = previewUrl;
-      recoveryState.lastAttemptAt = null;
-      recoveryState.inFlight = false;
-      recoveryState.forceNext = false;
-    }
-    const shouldEnsurePreview = shouldEnsurePreviewServer({
-      activeTab,
-      previewUrl,
-      inFlight: recoveryState.inFlight,
-      lastAttemptAt: recoveryState.forceNext ? null : recoveryState.lastAttemptAt,
-      cooldownMs: Number.POSITIVE_INFINITY
-    });
-    const forceEnsurePreview = recoveryState.forceNext;
-    recoveryState.forceNext = false;
-    const statusRequest = shouldEnsurePreview
-      ? (() => {
-          recoveryState.inFlight = true;
-          recoveryState.lastAttemptAt = Date.now();
-          const suffix = forceEnsurePreview ? "&force=1" : "";
-          return fetch(`/api/runs/${run.id}/sandbox/status?ensurePreview=1${suffix}`, { cache: "no-store" }).finally(() => {
-            recoveryState.inFlight = false;
-          });
-        })()
-      : Promise.resolve(null);
-    const [workspaceResponse, eventsResponse, statusResponse] = await Promise.all([
-      fetch(`/api/projects/${project.id}/workspace`, { cache: "no-store" }),
-      fetch(eventsUrl, { cache: "no-store" }),
-      statusRequest
-    ]);
-
-    if (workspaceResponse.ok) {
-      const payload = (await workspaceResponse.json()) as {
-        project: ProjectRow;
-        run: AgentRunRow;
-        tasks: TaskRow[];
-        artifacts: ArtifactRow[];
-        files: WorkspaceFileRow[];
-        sandboxRun: SandboxRunSnapshot | null;
-      };
-      setProject(payload.project);
-      setRun(payload.run);
-      setTasks(payload.tasks);
-      setArtifacts(payload.artifacts);
-      setFiles(payload.files);
-      setSandboxRun(payload.sandboxRun);
-      const shouldReloadCurrentRunEvents =
-        requestedRunId === payload.run.id &&
-        run.status !== "planning" &&
-        payload.run.status === "planning" &&
-        payload.run.current_step === "planning_queued";
-      if (shouldReloadRunEvents(requestedRunId, payload.run.id) || shouldReloadCurrentRunEvents) {
-        const nextEventsResponse = await fetch(`/api/runs/${payload.run.id}/events`, { cache: "no-store" });
-        if (nextEventsResponse.ok) {
-          const nextEventsPayload = (await nextEventsResponse.json()) as { events: RunEventRow[] };
-          eventsRef.current = nextEventsPayload.events;
-          setEvents(nextEventsPayload.events);
-        } else {
-          eventsRef.current = [];
-          setEvents([]);
-        }
-        return;
+    try {
+      const latestEventCursor = getLatestRunEventCursor(eventsRef.current);
+      const eventsUrl = latestEventCursor
+        ? `/api/runs/${requestedRunId}/events?after=${encodeURIComponent(latestEventCursor)}`
+        : `/api/runs/${requestedRunId}/events`;
+      const previewUrl = run.sandbox_preview_url ?? sandboxRun?.preview_url ?? null;
+      const recoveryState = previewRecoveryRef.current;
+      if (recoveryState.previewUrl !== previewUrl) {
+        recoveryState.previewUrl = previewUrl;
+        recoveryState.lastAttemptAt = null;
+        recoveryState.inFlight = false;
+        recoveryState.forceNext = false;
       }
-    }
-
-    if (eventsResponse.ok) {
-      const payload = (await eventsResponse.json()) as { events: RunEventRow[] };
-      setEvents((currentEvents) => {
-        const mergedEvents = mergeRunEvents(currentEvents, payload.events);
-        eventsRef.current = mergedEvents;
-        return mergedEvents;
+      const shouldEnsurePreview = shouldEnsurePreviewServer({
+        activeTab,
+        previewUrl,
+        inFlight: recoveryState.inFlight,
+        lastAttemptAt: recoveryState.forceNext ? null : recoveryState.lastAttemptAt,
+        cooldownMs: Number.POSITIVE_INFINITY
       });
-    }
+      const forceEnsurePreview = recoveryState.forceNext;
+      recoveryState.forceNext = false;
+      const statusRequest = shouldEnsurePreview
+        ? (() => {
+            recoveryState.inFlight = true;
+            recoveryState.lastAttemptAt = Date.now();
+            const suffix = forceEnsurePreview ? "&force=1" : "";
+            return fetch(`/api/runs/${run.id}/sandbox/status?ensurePreview=1${suffix}`, { cache: "no-store" }).finally(() => {
+              recoveryState.inFlight = false;
+            });
+          })()
+        : Promise.resolve(null);
+      const [workspaceResponse, eventsResponse, statusResponse] = await Promise.all([
+        fetch(`/api/projects/${project.id}/workspace`, { cache: "no-store" }),
+        fetch(eventsUrl, { cache: "no-store" }),
+        statusRequest
+      ]);
 
-    if (statusResponse?.ok) {
-      const payload = (await statusResponse.json()) as { run: AgentRunRow; sandboxRun: SandboxRunSnapshot | null; previewRecovered?: boolean };
-      setRun(payload.run);
-      setSandboxRun(payload.sandboxRun);
-      if (shouldReloadPreviewAfterRecovery({ previewRecovered: payload.previewRecovered, previewHealthy })) {
-        setPreviewReloadNonce((value) => value + 1);
+      if (workspaceResponse.ok) {
+        const payload = (await workspaceResponse.json()) as {
+          project: ProjectRow;
+          run: AgentRunRow;
+          tasks: TaskRow[];
+          artifacts: ArtifactRow[];
+          files: WorkspaceFileRow[];
+          sandboxRun: SandboxRunSnapshot | null;
+        };
+        setProject(payload.project);
+        setRun(payload.run);
+        setTasks(payload.tasks);
+        setArtifacts(payload.artifacts);
+        setFiles(payload.files);
+        setSandboxRun(payload.sandboxRun);
+        const shouldReloadCurrentRunEvents =
+          requestedRunId === payload.run.id &&
+          run.status !== "planning" &&
+          payload.run.status === "planning" &&
+          payload.run.current_step === "planning_queued";
+        if (shouldReloadRunEvents(requestedRunId, payload.run.id) || shouldReloadCurrentRunEvents) {
+          const nextEventsResponse = await fetch(`/api/runs/${payload.run.id}/events`, { cache: "no-store" });
+          if (nextEventsResponse.ok) {
+            const nextEventsPayload = (await nextEventsResponse.json()) as { events: RunEventRow[] };
+            eventsRef.current = nextEventsPayload.events;
+            setEvents(nextEventsPayload.events);
+          } else {
+            eventsRef.current = [];
+            setEvents([]);
+          }
+          return;
+        }
       }
+
+      if (eventsResponse.ok) {
+        const payload = (await eventsResponse.json()) as { events: RunEventRow[] };
+        setEvents((currentEvents) => {
+          const mergedEvents = mergeRunEvents(currentEvents, payload.events);
+          eventsRef.current = mergedEvents;
+          return mergedEvents;
+        });
+      }
+
+      if (statusResponse?.ok) {
+        const payload = (await statusResponse.json()) as { run: AgentRunRow; sandboxRun: SandboxRunSnapshot | null; previewRecovered?: boolean };
+        setRun(payload.run);
+        setSandboxRun(payload.sandboxRun);
+        if (shouldReloadPreviewAfterRecovery({ previewRecovered: payload.previewRecovered, previewHealthy })) {
+          setPreviewReloadNonce((value) => value + 1);
+        }
+      }
+    } finally {
+      workspaceRefreshRef.current.inFlight = false;
     }
   }, [activeTab, previewHealthy, project.id, run.id, run.sandbox_preview_url, run.status, sandboxRun?.preview_url]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
       void refreshWorkspace();
-    }, 3000);
+    }, getWorkspaceRefreshDelayMs(typeof document !== "undefined" ? document.hidden : false));
     return () => window.clearInterval(interval);
   }, [refreshWorkspace]);
 

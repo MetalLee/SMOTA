@@ -1,28 +1,19 @@
-import { after, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import {
   createSupabaseServiceClient,
   getSandboxWorkflowStartState,
   insertRunEvent,
-  queueSandboxWorkflowJob,
-  runVercelSandboxWorkflowJob
+  queueSandboxWorkflowJob
 } from "@smota/sandbox-runner";
+import { buildSandboxWorkerUrl, dispatchSandboxWorkflowWorker } from "@/lib/sandbox-worker-dispatch";
 import { createClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function dispatchSandboxWorkflowJob(runId: string) {
-  after(async () => {
-    try {
-      await runVercelSandboxWorkflowJob(runId);
-    } catch (error) {
-      console.error("Sandbox workflow job failed", error);
-    }
-  });
-}
-
-export async function POST(_request: Request, { params }: { params: Promise<{ runId: string }> }) {
+export async function POST(request: Request, { params }: { params: Promise<{ runId: string }> }) {
   const { runId } = await params;
+  const workerUrl = buildSandboxWorkerUrl(request);
   const supabase = await createClient();
   const {
     data: { user },
@@ -45,7 +36,7 @@ export async function POST(_request: Request, { params }: { params: Promise<{ ru
   }
 
   if (startState === "already_running") {
-    dispatchSandboxWorkflowJob(runId);
+    dispatchSandboxWorkflowWorker({ workerUrl, runId });
     return NextResponse.json({ status: startState, currentStep: run.current_step }, { status: 202 });
   }
 
@@ -71,7 +62,7 @@ export async function POST(_request: Request, { params }: { params: Promise<{ ru
     const { data: latestRun } = await admin.from("agent_runs").select("status,current_step").eq("id", runId).eq("owner_id", user.id).single();
     const latestState = getSandboxWorkflowStartState(String(latestRun?.status ?? ""), typeof latestRun?.current_step === "string" ? latestRun.current_step : null);
     if (latestState === "already_running") {
-      dispatchSandboxWorkflowJob(runId);
+      dispatchSandboxWorkflowWorker({ workerUrl, runId });
       return NextResponse.json({ status: latestState, currentStep: latestRun?.current_step ?? null }, { status: 202 });
     }
     return NextResponse.json({ error: "Run is not claimable for Sandbox start." }, { status: 409 });
@@ -85,6 +76,6 @@ export async function POST(_request: Request, { params }: { params: Promise<{ ru
     message: "Sandbox workflow job queued."
   });
 
-  dispatchSandboxWorkflowJob(runId);
+  dispatchSandboxWorkflowWorker({ workerUrl, runId });
   return NextResponse.json({ status: "accepted", currentStep: claimedRun.current_step }, { status: 202 });
 }

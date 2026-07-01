@@ -1,12 +1,12 @@
-import { after, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import {
   buildSandboxRuntimeConfig,
   createSupabaseServiceClient,
   ensureSandboxPreviewServer,
   getVercelSandbox,
-  runVercelSandboxWorkflowJob,
   shouldDispatchSandboxWorkflowJob
 } from "@smota/sandbox-runner";
+import { buildSandboxWorkerUrl, dispatchSandboxWorkflowWorker } from "@/lib/sandbox-worker-dispatch";
 import { canReadRunSandboxStatus, shouldAttemptPreviewRecovery } from "@/lib/sandbox-status-access";
 import { createClient } from "@/lib/supabase/server";
 
@@ -14,18 +14,9 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 const PREVIEW_RECOVERY_COOLDOWN_MS = 60_000;
 
-function dispatchSandboxWorkflowJob(runId: string) {
-  after(async () => {
-    try {
-      await runVercelSandboxWorkflowJob(runId);
-    } catch (error) {
-      console.error("Sandbox workflow job recovery failed", error);
-    }
-  });
-}
-
 export async function GET(request: Request, { params }: { params: Promise<{ runId: string }> }) {
   const { runId } = await params;
+  const workerUrl = buildSandboxWorkerUrl(request);
   const { searchParams } = new URL(request.url);
   const ensurePreview = searchParams.get("ensurePreview") === "1";
   const forcePreviewRecovery = searchParams.get("force") === "1";
@@ -65,7 +56,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ runI
   let previewRecoverySkipped = false;
 
   if (run.status === "running" && run.sandbox_status !== "stopped" && shouldDispatchSandboxWorkflowJob(sandboxWorkflowJob, new Date())) {
-    dispatchSandboxWorkflowJob(runId);
+    dispatchSandboxWorkflowWorker({ workerUrl, runId });
   }
 
   if (

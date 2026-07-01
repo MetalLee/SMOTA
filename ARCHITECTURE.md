@@ -77,7 +77,7 @@ ProductAgent、ArchitectAgent、PlannerAgent 和 ReviewerAgent 默认通过 `pac
    - PlannerAgent 生成 `ROADMAP.md`，并汇总 `AGENTS.md`。
 6. 用户批准计划。
 7. 项目详情页检测到 run 进入 `approved_waiting_for_sandbox` 后，自动调用 `POST /api/runs/[runId]/sandbox/start`。
-8. `/sandbox/start` 只原子 claim 当前 Run、写入 `sandbox_workflow_jobs` 并返回 `202 Accepted`；真实 Sandbox workflow 由后台 worker 根据 job lease 执行。
+8. `/sandbox/start` 只原子 claim 当前 Run、写入 `sandbox_workflow_jobs` 并返回 `202 Accepted`；真实 Sandbox workflow 由受保护的 internal worker 根据 job lease 分 phase 执行。
 9. Sandbox 元数据写入 Supabase。
 10. Harness 文件写入 Sandbox 内的 `/workspace`。
 11. 在 Sandbox 内初始化 Vite React TypeScript 应用。
@@ -193,7 +193,17 @@ ReviewerAgent 在构建成功、文件索引完成后运行。它读取 build re
 - `created_at timestamptz default now()`
 - `updated_at timestamptz default now()`
 
-`sandbox_workflow_jobs` 是 Sandbox 长流程的持久化调度记录。`/sandbox/start` 创建或重置 job 后立即返回；后台 worker 通过 lease claim job，完成后写入 `succeeded` 或 `failed`。如果请求中断或用户退出，工作台后续读取 `sandbox/status` 时可以在 lease 过期后重新触发 worker。
+`sandbox_workflow_jobs` 是 Sandbox 长流程的持久化调度记录。`/sandbox/start` 创建或重置 job 后立即返回，不在该请求内执行 OpenCode、install、build、截图或 Reviewer 全流程。受保护的 internal worker 通过 lease claim job，每次只执行一个可恢复 phase，并在成功后把 `current_phase` 推进到下一 phase；终态写入 `succeeded` 或 `failed`。如果请求中断或用户退出，工作台后续读取 `sandbox/status` 时可以在 lease 过期后重新触发 worker。
+
+当前 workflow phase 顺序为：
+
+1. `prepare_sandbox`
+2. `write_harness`
+3. `init_base_app`
+4. `start_preview`
+5. `run_coding_agent`
+6. `install_and_build`
+7. `review_and_complete`
 
 `planning_generation` 是规划阶段的写入隔离 token。每次 `/planning/start` claim 或用户提交计划修改时递增，ProductAgent、ArchitectAgent 和 PlannerAgent 的事件、artifacts、tasks 和最终状态写入都必须校验 generation，避免重复请求或旧请求在新一轮规划中写入过期的 `PlannerAgent completed` 等事件。
 

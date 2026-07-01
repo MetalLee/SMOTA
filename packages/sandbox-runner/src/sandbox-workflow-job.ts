@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { insertRunEvent, type RunContext } from "./sandbox-events";
 import { createSupabaseServiceClient } from "./sandbox-client";
-import { runVercelSandboxWorkflow } from "./sandbox-workflow";
+import { getNextSandboxWorkflowPhase, isSandboxWorkflowPhase, runVercelSandboxWorkflowPhase } from "./sandbox-workflow";
 
 export type SandboxWorkflowStartState = "claimable" | "already_running" | "finished" | "invalid";
 export type SandboxWorkflowJobStatus = "queued" | "running" | "succeeded" | "failed";
@@ -157,7 +157,7 @@ export async function claimSandboxWorkflowJob(
     .from("sandbox_workflow_jobs")
     .update({
       status: "running",
-      current_phase: "workflow",
+      current_phase: isSandboxWorkflowPhase(job.current_phase) ? job.current_phase : getNextSandboxWorkflowPhase(null),
       attempt_count: Number(job.attempt_count ?? 0) + 1,
       started_at: job.started_at ?? now.toISOString(),
       completed_at: null,
@@ -181,6 +181,21 @@ export async function claimSandboxWorkflowJob(
   }
 
   return { status: "claimed", job: claimed as SandboxWorkflowJobRow };
+}
+
+export async function markSandboxWorkflowJobPhaseQueued(supabase: SupabaseClient, context: RunContext, nextPhase: string | null) {
+  await supabase
+    .from("sandbox_workflow_jobs")
+    .update({
+      status: nextPhase ? "queued" : "succeeded",
+      current_phase: nextPhase ?? "succeeded",
+      lease_owner: null,
+      lease_expires_at: null,
+      completed_at: nextPhase ? null : new Date().toISOString(),
+      last_error: null
+    })
+    .eq("run_id", context.runId)
+    .eq("owner_id", context.ownerId);
 }
 
 export async function markSandboxWorkflowJobSucceeded(supabase: SupabaseClient, context: RunContext) {
@@ -240,10 +255,26 @@ export async function runVercelSandboxWorkflowJob(runId: string, options: { supa
   });
 
   try {
-    const result = await runVercelSandboxWorkflow(runId, { supabase, env: options.env });
+    const phase = isSandboxWorkflowPhase(claim.job.current_phase) ? claim.job.current_phase : getNextSandboxWorkflowPhase(null);
+    if (!phase) {
+      await markSandboxWorkflowJobSucceeded(supabase, context);
+      return { status: "succeeded" as const };
+    }
+
+    const result = await runVercelSandboxWorkflowPhase(runId, { supabase, env: options.env, phase });
     if (result.status === "succeeded") {
       await markSandboxWorkflowJobSucceeded(supabase, context);
       await insertRunEvent(supabase, context, { eventType: "sandbox.workflow.succeeded", step: "sandbox_workflow_job", message: "Sandbox workflow worker succeeded." });
+    } else if (result.status === "phase_completed") {
+      const nextPhase = getNextSandboxWorkflowPhase(phase);
+      await markSandboxWorkflowJobPhaseQueued(supabase, context, nextPhase);
+      await insertRunEvent(supabase, context, {
+        eventType: "sandbox.workflow.phase.completed",
+        step: "sandbox_workflow_phase",
+        message: nextPhase ? `Sandbox workflow phase ${phase} completed. Next phase: ${nextPhase}.` : `Sandbox workflow phase ${phase} completed.`,
+        payload: { phase, nextPhase }
+      });
+      return { ...result, nextPhase, continue: Boolean(nextPhase) };
     } else {
       const reason = "reason" in result && typeof result.reason === "string" ? result.reason : "Sandbox workflow failed.";
       await markSandboxWorkflowJobFailed(supabase, context, reason);

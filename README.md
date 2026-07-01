@@ -104,8 +104,8 @@ OpenCode CLI + pnpm install + pnpm build + Vite dev server
 7. Harness artifacts、Agent 状态和事件写入 Supabase；规划写入使用 `planning_generation` 隔离重复请求和计划修改后的过期请求。
 8. 用户批准计划后，Run 进入 `approved_waiting_for_sandbox`。
 9. 项目详情页自动调用 `POST /api/runs/[runId]/sandbox/start`。
-10. `/sandbox/start` 只原子 claim 当前 Run、写入 `sandbox_workflow_jobs` 并返回 `202 Accepted`，不等待完整构建完成。
-11. 后台 Sandbox workflow worker 根据 job lease 创建或恢复 Vercel Sandbox，并保存 `sandbox_name`、状态和运行元数据；`sandbox/status` 可在 lease 过期时重新触发恢复。
+10. `/sandbox/start` 只原子 claim 当前 Run、写入 `sandbox_workflow_jobs` 并返回 `202 Accepted`，不在该请求内执行完整 workflow。
+11. 受保护的 internal Sandbox workflow worker 根据 job lease 每次执行一个可恢复 phase，完成后把 `sandbox_workflow_jobs.current_phase` 推进到下一 phase；`sandbox/status` 可在 lease 过期时重新触发 worker。
 12. Sandbox 写入 Harness 文件到 `/workspace`，初始化 Vite React TypeScript 应用。
 13. Sandbox 执行 OpenCode CLI；CodingAgent 只按分配给 CodingAgent 的 task id 执行，并用 HTTP 请求把这些任务状态回写到 `tasks.status`。
 14. Sandbox 执行依赖安装和构建；失败时执行一次自动修复。
@@ -141,6 +141,7 @@ OpenCode CLI + pnpm install + pnpm build + Vite dev server
 - CodingAgent Prompt 只包含分配给 CodingAgent 的 task id、任务状态回写协议，以及 `PROJECT_BRIEF.md`、`ARCHITECTURE.md`、`CODEX_TASK_RULES.md` 三个必要 Harness；`ROADMAP.md` 和 `AGENTS.md` 仍写入 Sandbox 但不传入 Prompt。Prompt 明确要求 CodingAgent 必须通过 HTTP 完成 CodingAgent 任务状态回写，且不得更新非 CodingAgent 任务。
 - BuildAgent 执行 `pnpm install`、`pnpm build`，构建失败时只自动修复一次；构建成功后，平台服务端将当前 Run 下分配给 BuildAgent 的任务兜底更新为 `done`。
 - Terminal Tab 展示 Agent、Sandbox、OpenCode、安装、构建和修复日志。
+- 工作台轮询有 in-flight guard；隐藏标签页会降低刷新频率，避免慢请求堆积。
 - 左侧计划任务按 ProductAgent、ArchitectAgent、PlannerAgent、CodingAgent、BuildAgent、ReviewerAgent 顺序分组展示，同一 Agent 下保持 PlannerAgent 生成的原始顺序。
 - Files Tab 以树状表格展示 Sandbox 文件索引。
 - Editor Tab 使用 Monaco Editor 通过服务端 API 只读查看文件内容。

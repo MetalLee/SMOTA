@@ -9,6 +9,8 @@ import {
   buildPreviewServerEnsureShellCommand,
   buildRealtimeSandboxPhasePlan,
   buildSandboxWorkflowLease,
+  getNextSandboxWorkflowPhase,
+  getSandboxWorkflowPhasePlan,
   buildViteDevServerArgs,
   buildVitePreviewConfigContent,
   ensureSandboxPreviewServer,
@@ -22,6 +24,8 @@ import {
   isProbablyBinary,
   scanWorkspaceFiles,
   shouldDispatchSandboxWorkflowJob,
+  shouldContinueSandboxWorkflow,
+  shouldRunSandboxWorkflowPhase,
   sanitizeWorkspacePath,
   toSandboxEnvironment
 } from "./index";
@@ -82,6 +86,67 @@ describe("sandbox runner helpers", () => {
     expect(shouldDispatchSandboxWorkflowJob({ status: "running", lease_expires_at: "2026-06-30T12:01:00.000Z" }, now)).toBe(false);
     expect(shouldDispatchSandboxWorkflowJob({ status: "succeeded", lease_expires_at: null }, now)).toBe(false);
     expect(shouldDispatchSandboxWorkflowJob({ status: "failed", lease_expires_at: null }, now)).toBe(false);
+  });
+
+  it("orders Sandbox workflow phases for resumable worker invocations", () => {
+    expect(getSandboxWorkflowPhasePlan()).toEqual([
+      "prepare_sandbox",
+      "write_harness",
+      "init_base_app",
+      "start_preview",
+      "run_coding_agent",
+      "install_and_build",
+      "review_and_complete"
+    ]);
+
+    expect(getNextSandboxWorkflowPhase(null)).toBe("prepare_sandbox");
+    expect(getNextSandboxWorkflowPhase("prepare_sandbox")).toBe("write_harness");
+    expect(getNextSandboxWorkflowPhase("review_and_complete")).toBe(null);
+    expect(getNextSandboxWorkflowPhase("unknown")).toBe("prepare_sandbox");
+  });
+
+  it("skips phases already reflected in persisted run state", () => {
+    expect(
+      shouldRunSandboxWorkflowPhase("prepare_sandbox", {
+        sandboxName: "smota-run",
+        currentStep: "sandbox_ready",
+        runStatus: "running",
+        buildStatus: null
+      })
+    ).toBe(false);
+
+    expect(
+      shouldRunSandboxWorkflowPhase("run_coding_agent", {
+        sandboxName: "smota-run",
+        currentStep: "installing_after_opencode",
+        runStatus: "running",
+        buildStatus: null
+      })
+    ).toBe(false);
+
+    expect(
+      shouldRunSandboxWorkflowPhase("install_and_build", {
+        sandboxName: "smota-run",
+        currentStep: "building",
+        runStatus: "running",
+        buildStatus: "running"
+      })
+    ).toBe(true);
+
+    expect(
+      shouldRunSandboxWorkflowPhase("review_and_complete", {
+        sandboxName: "smota-run",
+        currentStep: "succeeded",
+        runStatus: "succeeded",
+        buildStatus: "succeeded"
+      })
+    ).toBe(false);
+  });
+
+  it("continues Sandbox workflow after intermediate phases only", () => {
+    expect(shouldContinueSandboxWorkflow({ phase: "prepare_sandbox", resultStatus: "phase_completed" })).toBe(true);
+    expect(shouldContinueSandboxWorkflow({ phase: "review_and_complete", resultStatus: "succeeded" })).toBe(false);
+    expect(shouldContinueSandboxWorkflow({ phase: "install_and_build", resultStatus: "failed" })).toBe(false);
   });
 
   it("resolves Vercel Sandbox tokens from Sandbox token, OIDC token, then Vercel token", () => {

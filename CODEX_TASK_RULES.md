@@ -39,8 +39,8 @@
 - 所有 Sandbox 操作必须通过服务端封装层完成。
 - 不要在页面组件中直接调用 Sandbox SDK。
 - Sandbox 任务必须可恢复。
-- `/sandbox/start` 必须是快速返回的异步启动入口，只负责 claim Run、写入 `sandbox_workflow_jobs` 并返回 `202 Accepted`；不得在该请求内同步等待 OpenCode、install、build、截图或 Reviewer 全流程完成。
-- Sandbox workflow 必须通过持久化 job lease 防重复执行；如果用户退出或请求中断，后续状态查询可以在 lease 过期后重新触发后台 worker。
+- `/sandbox/start` 必须是快速返回的异步启动入口，只负责 claim Run、写入 `sandbox_workflow_jobs` 并返回 `202 Accepted`；不得在该请求内同步或通过 request continuation 执行 OpenCode、install、build、截图或 Reviewer 全流程。
+- Sandbox workflow 必须通过受保护的 internal worker 和持久化 job lease 防重复执行；worker 每次只执行一个可恢复 phase，成功后推进 `sandbox_workflow_jobs.current_phase`。如果用户退出或请求中断，后续状态查询可以在 lease 过期后重新触发 worker。
 - 必须把 run 状态、sandbox name、当前 step 和 step results 持久化到 Supabase。
 - 必须把 stdout/stderr、Agent 状态和构建结果持久化到 `run_events`。
 - `tasks` 表是任务分解和任务进度唯一事实来源；`ROADMAP.md` 只作为可读计划说明，OpenCode 不得再维护另一套独立任务清单。

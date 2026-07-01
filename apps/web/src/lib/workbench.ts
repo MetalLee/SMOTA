@@ -184,6 +184,32 @@ export function shouldEnsurePreviewServer(params: {
   return now - lastAttemptAt >= cooldownMs;
 }
 
+export function getWorkspaceRefreshDelayMs(documentHidden: boolean): number {
+  return documentHidden ? 15_000 : 3_000;
+}
+
+export function shouldStartWorkspaceRefresh(params: {
+  inFlight: boolean;
+  documentHidden: boolean;
+  lastStartedAt?: number | null;
+  now?: number;
+}): boolean {
+  if (params.inFlight) {
+    return false;
+  }
+
+  if (!params.documentHidden) {
+    return true;
+  }
+
+  const lastStartedAt = params.lastStartedAt ?? null;
+  if (lastStartedAt === null) {
+    return true;
+  }
+
+  return (params.now ?? Date.now()) - lastStartedAt >= getWorkspaceRefreshDelayMs(true);
+}
+
 export function shouldReloadPreviewAfterRecovery(params: { previewRecovered?: boolean; previewHealthy: boolean }): boolean {
   return Boolean(params.previewRecovered) && !params.previewHealthy;
 }
