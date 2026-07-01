@@ -113,6 +113,32 @@ export function shouldContinueSandboxWorkflow(input: { phase: SandboxWorkflowPha
   return input.resultStatus === "phase_completed" && getNextSandboxWorkflowPhase(input.phase) !== null;
 }
 
+export function buildSandboxWorkflowPhaseStepEvent(input: {
+  phase: SandboxWorkflowPhase;
+  phaseStep: string;
+  message: string;
+  payload?: Record<string, unknown>;
+}) {
+  return {
+    eventType: "sandbox.workflow.phase.step" as const,
+    step: `phase:${input.phase}:${input.phaseStep}`,
+    message: input.message,
+    payload: {
+      phase: input.phase,
+      phaseStep: input.phaseStep,
+      ...(input.payload ?? {})
+    }
+  };
+}
+
+async function insertWorkflowPhaseStep(
+  supabase: SupabaseClient,
+  context: RunContext,
+  input: Parameters<typeof buildSandboxWorkflowPhaseStepEvent>[0]
+) {
+  await insertRunEvent(supabase, context, buildSandboxWorkflowPhaseStepEvent(input));
+}
+
 function formatCodingTaskLines(tasks: CodingTask[]) {
   return tasks.filter((task) => task.agentName === "CodingAgent").map((task, index) =>
     [
@@ -384,9 +410,21 @@ export async function runVercelSandboxWorkflowPhase(
   }
 
   try {
+    await insertWorkflowPhaseStep(supabase, context, {
+      phase: options.phase,
+      phaseStep: "started",
+      message: `Sandbox workflow phase ${options.phase} started.`
+    });
+
     if (options.phase === "prepare_sandbox") {
       const existingSandboxName = typeof run.sandbox_name === "string" && run.sandbox_name.trim() ? run.sandbox_name.trim() : null;
       const sandboxName = existingSandboxName ?? buildSandboxName({ ownerId: run.owner_id, projectId: run.project_id, runId: run.id });
+      await insertWorkflowPhaseStep(supabase, context, {
+        phase: options.phase,
+        phaseStep: "get_sandbox",
+        message: `Resolving Vercel Sandbox for phase ${options.phase}.`,
+        payload: { sandboxName, reuseExistingSandbox: Boolean(existingSandboxName) }
+      });
       await updateRunStatus(supabase, context, {
         status: "running",
         sandbox_name: sandboxName,
@@ -396,6 +434,12 @@ export async function runVercelSandboxWorkflowPhase(
         current_step: existingSandboxName ? "reusing_sandbox_workspace" : "creating_sandbox"
       });
       const sandbox = existingSandboxName ? await getVercelSandbox(sandboxName) : await createVercelSandbox({ name: sandboxName, config, env });
+      await insertWorkflowPhaseStep(supabase, context, {
+        phase: options.phase,
+        phaseStep: "sandbox_ready",
+        message: `Resolved Vercel Sandbox for phase ${options.phase}.`,
+        payload: { sandboxName, reuseExistingSandbox: Boolean(existingSandboxName) }
+      });
       await upsertSandboxRun(supabase, context, {
         owner_id: context.ownerId,
         project_id: context.projectId,
@@ -429,7 +473,19 @@ export async function runVercelSandboxWorkflowPhase(
       return { status: "phase_completed", phase: options.phase };
     }
 
-    const { sandbox } = await getWorkflowSandbox({ run, config, env });
+    await insertWorkflowPhaseStep(supabase, context, {
+      phase: options.phase,
+      phaseStep: "get_sandbox",
+      message: `Resolving Vercel Sandbox for phase ${options.phase}.`,
+      payload: { sandboxName: run.sandbox_name ?? null }
+    });
+    const { sandbox, sandboxName, reuseExistingSandbox } = await getWorkflowSandbox({ run, config, env });
+    await insertWorkflowPhaseStep(supabase, context, {
+      phase: options.phase,
+      phaseStep: "sandbox_ready",
+      message: `Resolved Vercel Sandbox for phase ${options.phase}.`,
+      payload: { sandboxName, reuseExistingSandbox }
+    });
 
     if (options.phase === "write_harness") {
       const harnessArtifacts = await loadHarnessArtifacts(supabase, run);
@@ -485,6 +541,12 @@ export async function runVercelSandboxWorkflowPhase(
     }
 
     if (options.phase === "run_coding_agent") {
+      await updateRunStatus(supabase, context, { current_step: "preparing_coding_agent", sandbox_status: "generating" });
+      await insertWorkflowPhaseStep(supabase, context, {
+        phase: options.phase,
+        phaseStep: "prepare_coding_env",
+        message: "Preparing CodingAgent environment."
+      });
       const taskUpdateSecret = getTaskUpdateSecret(env);
       const taskUpdateUrl = buildTaskUpdateApiBaseUrl({ env, runId: run.id });
       const codingAgentEnv = buildSandboxCodingAgentEnvironment({
@@ -496,6 +558,11 @@ export async function runVercelSandboxWorkflowPhase(
       const opencodeModel = buildOpenCodeModel(env);
 
       if (env.OPENCODE_CLI_INSTALL_COMMAND) {
+        await insertWorkflowPhaseStep(supabase, context, {
+          phase: options.phase,
+          phaseStep: "install_opencode_cli",
+          message: "Installing OpenCode CLI before CodingAgent run."
+        });
         await runSandboxCommand({
           supabase,
           context,
@@ -507,8 +574,19 @@ export async function runVercelSandboxWorkflowPhase(
           env: codingAgentEnv,
           timeoutMs: 15 * 60 * 1000
         });
+      } else {
+        await insertWorkflowPhaseStep(supabase, context, {
+          phase: options.phase,
+          phaseStep: "skip_install_opencode_cli",
+          message: "Skipping OpenCode CLI install command because OPENCODE_CLI_INSTALL_COMMAND is not configured."
+        });
       }
 
+      await insertWorkflowPhaseStep(supabase, context, {
+        phase: options.phase,
+        phaseStep: "check_opencode_cli",
+        message: "Checking OpenCode CLI availability."
+      });
       const opencodeCheck = await runSandboxCommand({
         supabase,
         context,
@@ -528,12 +606,39 @@ export async function runVercelSandboxWorkflowPhase(
         return { status: "failed", phase: options.phase, reason: message };
       }
 
+      await insertWorkflowPhaseStep(supabase, context, {
+        phase: options.phase,
+        phaseStep: "write_opencode_config",
+        message: "Writing OpenCode configuration."
+      });
       await sandbox.writeFiles([{ path: `${WORKSPACE_DIR}/opencode.json`, content: buildOpenCodeConfig({ model: opencodeModel, baseUrl: env.OPENAI_BASE_URL || DEEPSEEK_OPENAI_BASE_URL }) }]);
+      await insertWorkflowPhaseStep(supabase, context, {
+        phase: options.phase,
+        phaseStep: "opencode_config_written",
+        message: "OpenCode configuration written."
+      });
+      await insertWorkflowPhaseStep(supabase, context, {
+        phase: options.phase,
+        phaseStep: "load_inputs",
+        message: "Loading CodingAgent tasks and workspace inputs."
+      });
       const [{ data: tasks }, { data: workspaceFiles }] = await Promise.all([
         supabase.from("tasks").select("id, title, description, status, agent_name, sort_order").eq("run_id", run.id).eq("owner_id", run.owner_id).order("sort_order"),
         supabase.from("workspace_files").select("path").eq("project_id", run.project_id).eq("owner_id", run.owner_id).order("path", { ascending: true })
       ]);
+      await insertWorkflowPhaseStep(supabase, context, {
+        phase: options.phase,
+        phaseStep: "load_harness_artifacts",
+        message: "Loading CodingAgent harness artifacts.",
+        payload: { taskCount: tasks?.length ?? 0, workspaceFileCount: workspaceFiles?.length ?? 0 }
+      });
       const harnessArtifacts = await loadHarnessArtifacts(supabase, run);
+      await insertWorkflowPhaseStep(supabase, context, {
+        phase: options.phase,
+        phaseStep: "build_prompt",
+        message: "Building CodingAgent prompt.",
+        payload: { artifactCount: harnessArtifacts.length, continuation: Boolean(run.parent_run_id || project.source_project_id) }
+      });
       const taskPrompt = run.parent_run_id || project.source_project_id
         ? buildContinuationCodingAgentPrompt({
             originalProjectPrompt: project.prompt ?? project.description ?? "",
@@ -565,6 +670,12 @@ export async function runVercelSandboxWorkflowPhase(
             taskUpdateTokenEnvName: "SMOTA_TASK_UPDATE_TOKEN"
           });
 
+      await insertWorkflowPhaseStep(supabase, context, {
+        phase: options.phase,
+        phaseStep: "opencode_run",
+        message: "Starting OpenCode CodingAgent run.",
+        payload: { model: opencodeModel }
+      });
       await updateRunStatus(supabase, context, { current_step: "running_opencode", sandbox_status: "generating" });
       const opencodeRun = await runSandboxCommand({
         supabase,
@@ -580,6 +691,11 @@ export async function runVercelSandboxWorkflowPhase(
       if (opencodeRun.exitCode !== 0) {
         throw new Error(await commandOutput(opencodeRun));
       }
+      await insertWorkflowPhaseStep(supabase, context, {
+        phase: options.phase,
+        phaseStep: "opencode_finished",
+        message: "OpenCode CodingAgent run finished."
+      });
       await scanWorkspaceFiles({ sandbox, supabase, context, phase: "opencode_run" });
       return { status: "phase_completed", phase: options.phase };
     }

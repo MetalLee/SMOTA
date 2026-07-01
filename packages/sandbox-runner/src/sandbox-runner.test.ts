@@ -8,6 +8,7 @@ import {
   buildOpenCodeRunShellCommand,
   buildPreviewServerEnsureShellCommand,
   buildRealtimeSandboxPhasePlan,
+  buildSandboxWorkflowPhaseStepEvent,
   buildSandboxWorkflowLease,
   getNextSandboxWorkflowPhase,
   getSandboxWorkflowPhasePlan,
@@ -147,6 +148,26 @@ describe("sandbox runner helpers", () => {
     expect(shouldContinueSandboxWorkflow({ phase: "prepare_sandbox", resultStatus: "phase_completed" })).toBe(true);
     expect(shouldContinueSandboxWorkflow({ phase: "review_and_complete", resultStatus: "succeeded" })).toBe(false);
     expect(shouldContinueSandboxWorkflow({ phase: "install_and_build", resultStatus: "failed" })).toBe(false);
+  });
+
+  it("builds Sandbox workflow phase boundary events with phase metadata", () => {
+    expect(
+      buildSandboxWorkflowPhaseStepEvent({
+        phase: "run_coding_agent",
+        phaseStep: "load_inputs",
+        message: "Loading CodingAgent inputs.",
+        payload: { taskCount: 2 }
+      })
+    ).toEqual({
+      eventType: "sandbox.workflow.phase.step",
+      step: "phase:run_coding_agent:load_inputs",
+      message: "Loading CodingAgent inputs.",
+      payload: {
+        phase: "run_coding_agent",
+        phaseStep: "load_inputs",
+        taskCount: 2
+      }
+    });
   });
 
   it("resolves Vercel Sandbox tokens from Sandbox token, OIDC token, then Vercel token", () => {

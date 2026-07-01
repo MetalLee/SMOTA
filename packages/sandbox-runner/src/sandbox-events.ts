@@ -9,6 +9,7 @@ export type RunEventType =
   | "sandbox.workflow.queued"
   | "sandbox.workflow.started"
   | "sandbox.workflow.skipped"
+  | "sandbox.workflow.phase.step"
   | "sandbox.workflow.phase.completed"
   | "sandbox.workflow.succeeded"
   | "sandbox.workflow.failed"

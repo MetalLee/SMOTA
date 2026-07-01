@@ -110,7 +110,7 @@ OpenCode CLI + pnpm install + pnpm build + Vite dev server
 13. Sandbox 执行 OpenCode CLI；CodingAgent 只按分配给 CodingAgent 的 task id 执行，并用 HTTP 请求把这些任务状态回写到 `tasks.status`。
 14. Sandbox 执行依赖安装和构建；失败时执行一次自动修复。
 15. BuildAgent 构建成功后，Runner 将当前 Run 下分配给 BuildAgent 的任务兜底更新为 `done`。
-16. stdout / stderr、构建状态、错误和 step 事件持续写入 `run_events`。
+16. stdout / stderr、构建状态、错误和 step 事件持续写入 `run_events`；Sandbox workflow phase 会额外写入边界事件，用于定位卡在 Sandbox 解析、CodingAgent 输入加载、OpenCode 配置或 OpenCode 执行等阶段。
 17. Runner 扫描 `/workspace` 文件树并写入 `workspace_files`。
 18. Vite dev server 以 `5173` 端口启动，preview URL 写入 `agent_runs` 和 `sandbox_runs`。
 19. ReviewerAgent 基于构建结果、事件、文件索引和已知问题生成中文 `REVIEW_REPORT.md`。

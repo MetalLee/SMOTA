@@ -39,6 +39,7 @@ const RUNNING_SANDBOX_WORKFLOW_STEPS = new Set([
   "installing_initial",
   "starting_preview",
   "preview_ready",
+  "preparing_coding_agent",
   "install_opencode_cli",
   "check_opencode_cli",
   "running_opencode",
